@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kochbuch</title>
+  <meta name="theme-color" content="#2f7d4f">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥕</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="#/" class="logo"><span class="logo-mark">🥕</span><span>Kochbuch</span></a>
+      <nav class="nav" id="nav" hidden>
+        <a href="#/" class="nav-link hide-sm">Rezepte</a>
+        <button class="nav-link" id="btn-random" title="Zufälliges Rezept">🎲 <span class="hide-sm">Zufall</span></button>
+        <a href="#/neu" class="btn btn-primary">+ <span class="hide-sm">Neues Rezept</span></a>
+        <span class="user-name hide-sm" id="user-name"></span>
+        <button class="nav-link" id="btn-logout" title="Abmelden" aria-label="Abmelden"><svg viewBox="0 0 24 24" class="ic"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l5-5-5-5M15 12H4"/></svg> <span class="hide-sm">Logout</span></button>
+      </nav>
+    </div>
+  </header>
+  <main id="app"><div class="loading">Lade…</div></main>
+  <div id="toast" class="toast" hidden></div>
+  <div id="lightbox" class="lightbox" hidden><img alt=""></div>
+  <script src="app.js"></script>
+</body>
+</html>

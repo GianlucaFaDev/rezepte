@@ -1,0 +1,15 @@
+services:
+  kochbuch:
+    build: .
+    container_name: kochbuch
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Nach dem Anlegen der eigenen Konten Registrierung abschalten:
+      # ALLOW_REGISTRATION: "false"
+      # Hinter einem Reverse-Proxy (Caddy/nginx/Traefik) setzen, siehe README:
+      # TRUST_PROXY: "1"
+      TZ: Europe/Berlin
+    volumes:
+      - ./data:/data   # Datenbank + Fotos (diesen Ordner sichern!)
