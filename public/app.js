@@ -13,6 +13,7 @@ const state = {
   q: '',
   sort: 'titel',
   view: lsGet('view') || 'stapel',
+  scope: lsGet('scope') || 'mine', // 'mine' oder Gruppen-ID
   f: { gang: new Set(), zeit: new Set(), preis: new Set(), aufwand: new Set(), kueche: new Set(), tags: new Set() },
   ids: [],          // aktuelle Trefferliste (zum Blättern)
   random: false,    // kam man über "Zufall" zum Rezept?
@@ -54,6 +55,7 @@ function toast(msg, isError = false) {
 
 function filterParams() {
   const p = new URLSearchParams();
+  if (state.scope !== 'mine') p.set('scope', state.scope);
   if (state.q) p.set('q', state.q);
   for (const [k, set] of Object.entries(state.f)) for (const v of set) p.append(k, v);
   p.set('sort', state.sort);
@@ -236,6 +238,7 @@ function recipeCard(r, { link = true, big = false } = {}) {
         <h3 class="rcard-title">${esc(r.title)}</h3>
         ${r.subtitle ? `<p class="rcard-sub">${esc(r.subtitle)}</p>` : ''}
         <p class="rcard-meta">${metaLine(r)}</p>
+        ${r.own === false && r.author ? `<p class="rcard-author">von ${esc(r.author)}</p>` : ''}
       </div>
       <div class="rcard-badge-wrap">
         <div class="rcard-badge" style="--bc:${badgeColor(r.id)}"><span>${r.id}</span></div>
@@ -261,12 +264,13 @@ async function route() {
     if (shareToken) { showUser(); return await renderDetail(null, { shared: true }); }
     if (!auth.user) return renderLogin();
     showUser();
-    if (!meta) { meta = await api('/api/meta'); pruneFilters(); showStorage(); }
+    if (!meta) await reloadMeta();
     // Nach dem Login: vorgemerktes geteiltes Rezept übernehmen
     const pending = ssTake('import');
     if (pending) return await importShared(pending);
     if (view === 'kategorien') renderCategories();
     else if (view === 'benutzer') await renderUsers();
+    else if (view === 'gruppen') await renderGroups();
     else if (view === 'kalender') await renderCalendar(id);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
@@ -305,7 +309,10 @@ function showUser() {
   const n = admin ? auth.pending || 0 : 0;
   $('#menu-users-badge').textContent = n;
   $('#menu-users-badge').hidden = !n;
-  $('#user-badge').hidden = !n;
+  const inv = auth?.user ? meta?.invites || 0 : 0;
+  $('#menu-groups-badge').textContent = inv;
+  $('#menu-groups-badge').hidden = !inv;
+  $('#user-badge').hidden = !(n || inv);
 }
 
 const fmtMB = (bytes) => {
@@ -411,14 +418,14 @@ $('#btn-logout').addEventListener('click', async () => {
 // ================= Übersicht =================
 const CAT_LABELS = { gang: 'Gang', zeit: 'Zeit', aufwand: 'Aufwand', preis: 'Preis', kueche: 'Küche' };
 const GROUPS = [
-  ...Object.keys(CAT_LABELS).map((k) => [k, CAT_LABELS[k], () => (meta.options[k] || []).map((v) => [v, v])]),
+  ...Object.keys(CAT_LABELS).map((k) => [k, CAT_LABELS[k], () => (meta.filterOptions[k] || []).map((v) => [v, v])]),
   ['tags', 'Tags', () => meta.tags.map((t) => [t.name, '#' + t.name])],
 ];
 
 // Filter entfernen, deren Wert es nicht mehr gibt (z. B. nach Löschen/Umbenennen)
 function pruneFilters() {
   for (const k of Object.keys(CAT_LABELS)) {
-    for (const v of state.f[k]) if (!(meta.options[k] || []).includes(v)) state.f[k].delete(v);
+    for (const v of state.f[k]) if (!(meta.filterOptions[k] || []).includes(v)) state.f[k].delete(v);
   }
   const tags = new Set(meta.tags.map((t) => t.name));
   for (const v of state.f.tags) if (!tags.has(v)) state.f.tags.delete(v);
@@ -460,6 +467,8 @@ async function addOption(category, btn) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ category, value }),
     });
     meta.options[category].push(res.value);
+    const fo = meta.filterOptions[category];
+    if (!fo.some((v) => v.toLowerCase() === res.value.toLowerCase())) fo.push(res.value);
     return res.value;
   } catch (e) { toast(e.message, true); return null; }
 }
@@ -469,6 +478,10 @@ async function renderList() {
   app.innerHTML = `
     <section class="intro">
       <h1>Was kochen wir heute?</h1>
+      ${meta.groups.length ? `<div class="scope-bar" role="group" aria-label="Kochbuch">
+        <button class="chip${state.scope === 'mine' ? ' on' : ''}" data-scope="mine">Meine Rezepte</button>
+        ${meta.groups.map((g) => `<button class="chip${state.scope === String(g.id) ? ' on' : ''}" data-scope="${g.id}">👥 ${esc(g.name)}</button>`).join('')}
+      </div>` : ''}
       <div class="searchbar">
         <input id="q" type="search" placeholder="Rezept oder Zutat suchen…" value="${esc(state.q)}" autocomplete="off">
       </div>
@@ -501,6 +514,14 @@ async function renderList() {
   });
   $('#sort').addEventListener('change', (e) => { state.sort = e.target.value; loadCards(); });
   $('#rnd-filter').addEventListener('click', () => goRandom(true));
+  $$('[data-scope]').forEach((b) => b.addEventListener('click', async () => {
+    if (b.dataset.scope === state.scope) return;
+    setScope(b.dataset.scope);
+    Object.values(state.f).forEach((s) => s.clear());
+    state.listScroll = 0;
+    try { await reloadMeta(); } catch (e) { return toast(e.message, true); }
+    renderList();
+  }));
   $$('.seg button').forEach((b) => b.addEventListener('click', () => {
     state.view = b.dataset.view;
     lsSet('view', state.view);
@@ -563,6 +584,9 @@ async function loadCards() {
   cards.className = 'cards cards-' + state.view;
   if (list.length) {
     cards.innerHTML = list.map((r) => recipeCard(r)).join('');
+  } else if (meta.total === 0 && state.scope !== 'mine') {
+    cards.innerHTML = `<div class="empty"><div class="empty-ic">👥</div><h2>Noch keine Rezepte in der Gruppe</h2>
+      <p>Hier erscheinen die Rezepte aller Mitglieder, sobald jemand eins anlegt.</p></div>`;
   } else if (meta.total === 0) {
     cards.innerHTML = `<div class="empty"><div class="empty-ic">📖</div><h2>Noch keine Rezepte</h2>
       <p>Leg dein erstes Rezept an, mit Foto, Zutaten und Schritten.</p><a class="btn btn-primary" href="#/neu">+ Erstes Rezept anlegen</a></div>`;
@@ -621,6 +645,9 @@ async function renderDetail(id, { shared = false } = {}) {
         : `<button class="chip chip-sm" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>
       ${shared ? `<div class="actions">
         <button class="btn btn-primary" id="import">+ Zu meinem Kochbuch hinzufügen</button>
+      </div>` : r.own === false ? `<div class="actions">
+        ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
+        <button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>
       </div>` : `<div class="actions">
         ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
         <button class="btn btn-outline" id="share">${ICON.share} Teilen</button>
@@ -694,6 +721,16 @@ async function renderDetail(id, { shared = false } = {}) {
   }));
 
   $('#reroll')?.addEventListener('click', () => goRandom(state.randomFiltered));
+  $('#copy')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const res = await api(`/api/recipes/${r.id}/copy`, { method: 'POST' });
+      meta = null;
+      state.ids = [];
+      toast('In dein Kochbuch kopiert ✓');
+      location.hash = '#/r/' + res.id;
+    } catch (err) { toast(err.message, true); e.target.disabled = false; }
+  });
   $('#share')?.addEventListener('click', () => openShareBox(r));
   $('#import')?.addEventListener('click', () => {
     if (auth?.user) return importShared(shareToken);
@@ -1033,10 +1070,134 @@ async function renderUsers() {
   });
 }
 
+// ================= Gruppen =================
+async function renderGroups() {
+  const { groups, invites } = await api('/api/groups');
+  if (meta) { meta.invites = invites.length; showUser(); }
+  window.scrollTo(0, 0);
+  const me = auth.user.id;
+  app.innerHTML = `
+  <div class="form">
+    <div class="form-head">
+      <a href="#/" class="back">${ICON.left} Zurück</a>
+      <h1>Gruppen</h1>
+      <p class="muted">In einer Gruppe sieht jedes Mitglied die Rezepte der anderen (nur lesen, kopieren ins eigene Kochbuch geht).
+        Umschalten kannst du oben in der Übersicht. Kalender und Kategorien bleiben privat.</p>
+    </div>
+    ${invites.length ? `<fieldset class="panel">
+      <legend>Einladungen</legend>
+      <ul class="user-list">${invites.map((i) => `
+        <li class="user-row" data-gid="${i.id}" data-name="${esc(i.name)}">
+          <div class="user-info"><strong>${esc(i.name)}</strong><small class="muted">eingeladen von ${esc(i.owner)}</small></div>
+          <div class="user-actions">
+            <button type="button" class="btn btn-primary" data-act="accept">Beitreten</button>
+            <button type="button" class="btn btn-ghost-danger" data-act="decline">Ablehnen</button>
+          </div>
+        </li>`).join('')}</ul>
+      <p class="muted group-hint">Wenn du beitrittst, sehen die Mitglieder auch deine Rezepte.</p>
+    </fieldset>` : ''}
+    ${groups.map((g) => `
+    <fieldset class="panel group-panel" data-gid="${g.id}" data-name="${esc(g.name)}">
+      <legend>👥 ${esc(g.name)}</legend>
+      <ul class="user-list">${g.members.map((m) => `
+        <li class="user-row" data-uid="${m.id}" data-uname="${esc(m.username)}">
+          <div class="user-info"><strong>${esc(m.username)}${m.id === me ? ' (du)' : ''}</strong>
+            <small class="muted">${m.isOwner ? 'hat die Gruppe angelegt' : m.accepted ? 'Mitglied' : 'eingeladen, noch nicht beigetreten'}</small></div>
+          <div class="user-actions">${g.isOwner && !m.isOwner
+            ? `<button type="button" class="btn btn-ghost-danger" data-act="remove">${m.accepted ? 'Entfernen' : 'Zurückziehen'}</button>` : ''}</div>
+        </li>`).join('')}</ul>
+      <div class="group-foot">
+        ${g.isOwner ? `<form class="group-invite" data-act="invite">
+            <input name="username" placeholder="Benutzername einladen" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="32" required>
+            <button class="btn btn-primary">Einladen</button>
+          </form>
+          <div class="group-links">
+            <button type="button" class="link-btn" data-act="rename">Umbenennen</button>
+            <button type="button" class="link-btn share-off" data-act="delete">Gruppe löschen</button>
+          </div>`
+          : '<div class="group-links"><button type="button" class="link-btn share-off" data-act="leave">Gruppe verlassen</button></div>'}
+      </div>
+    </fieldset>`).join('')}
+    <fieldset class="panel">
+      <legend>Neue Gruppe</legend>
+      <form class="group-invite" data-act="create">
+        <input name="name" placeholder="z. B. Familie" maxlength="60" autocomplete="off" required>
+        <button class="btn btn-primary">Anlegen</button>
+      </form>
+    </fieldset>
+  </div>`;
+
+  const json = (url, method, body) => api(url, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  const done = async (msg) => {
+    toast(msg);
+    meta = null; // Gruppenliste/Umschalter neu laden
+    await reloadMeta();
+    await renderGroups();
+  };
+  const root = app.querySelector('.form');
+
+  root.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = $('button', f);
+    btn.disabled = true;
+    try {
+      if (f.dataset.act === 'create') {
+        await json('/api/groups', 'POST', { name: f.name.value });
+        await done('Gruppe angelegt. Lade jetzt Mitglieder ein.');
+      } else {
+        const gid = f.closest('.group-panel').dataset.gid;
+        const res = await json(`/api/groups/${gid}/members`, 'POST', { username: f.username.value.trim() });
+        await done(`${res.username} eingeladen. Sichtbar wird alles, sobald die Einladung angenommen ist.`);
+      }
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+
+  root.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const act = btn.dataset.act;
+    const row = btn.closest('.user-row');
+    const panel = btn.closest('[data-gid]');
+    const gid = panel.dataset.gid;
+    const gname = panel.dataset.name;
+    try {
+      if (act === 'accept') {
+        await api(`/api/groups/${gid}/accept`, { method: 'POST' });
+        await done(`Du bist jetzt in „${gname}“`);
+      } else if (act === 'decline' || act === 'leave') {
+        if (!confirm(act === 'leave' ? `„${gname}“ verlassen? Die anderen sehen deine Rezepte dann nicht mehr.` : `Einladung zu „${gname}“ ablehnen?`)) return;
+        await api(`/api/groups/${gid}/members/${me}`, { method: 'DELETE' });
+        await done(act === 'leave' ? 'Gruppe verlassen' : 'Einladung abgelehnt');
+      } else if (act === 'remove') {
+        if (!confirm(`${row.dataset.uname} aus „${gname}“ entfernen?`)) return;
+        await api(`/api/groups/${gid}/members/${row.dataset.uid}`, { method: 'DELETE' });
+        await done(`${row.dataset.uname} entfernt`);
+      } else if (act === 'rename') {
+        const name = prompt('Neuer Name der Gruppe:', gname)?.trim();
+        if (!name || name === gname) return;
+        await json(`/api/groups/${gid}`, 'PUT', { name });
+        await done('Umbenannt');
+      } else if (act === 'delete') {
+        if (!confirm(`Gruppe „${gname}“ löschen? Die Rezepte bleiben bei ihren Besitzern erhalten.`)) return;
+        await api(`/api/groups/${gid}`, { method: 'DELETE' });
+        await done('Gruppe gelöscht');
+      }
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+function setScope(scope) {
+  state.scope = String(scope);
+  lsSet('scope', state.scope);
+}
+
 async function reloadMeta() {
-  meta = await api('/api/meta');
+  meta = await api('/api/meta' + (state.scope !== 'mine' ? '?scope=' + encodeURIComponent(state.scope) : ''));
+  if (meta.scope !== state.scope) setScope(meta.scope); // z. B. Gruppe verlassen
   pruneFilters();
   showStorage();
+  showUser();
   state.ids = [];
 }
 

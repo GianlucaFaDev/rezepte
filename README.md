@@ -66,6 +66,10 @@ freigeschaltet werden (Benutzermenü → „Benutzer“), vorher ist keine Anmel
 sich Anfragen auch ablehnen und Konten löschen. Höchstens 20 Anfragen können gleichzeitig offen sein.
 Wer gar keine neuen Konten möchte: `ALLOW_REGISTRATION=false` setzen.
 
+**Gruppen:** Unter Benutzermenü → „Gruppen“ kann jeder eine Gruppe anlegen und andere per Benutzername
+einladen. Erst wenn die Einladung angenommen ist, sehen sich die Mitglieder gegenseitig ihre Rezepte
+(nur lesen; „In mein Kochbuch kopieren“ legt eine eigene Kopie an). In der Übersicht schaltet man
+zwischen „Meine Rezepte“ und den Gruppen um. Kalender und Kategorien bleiben privat.
 ## Von außen erreichbar machen
 
 Hinter einem Reverse-Proxy (Caddy, nginx, Traefik) **`TRUST_PROXY` setzen**, sonst sieht die App

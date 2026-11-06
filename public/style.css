@@ -384,6 +384,16 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .user-tag { display: inline-block; font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--green); }
 .user-actions { display: flex; gap: .4rem; }
 .user-empty { clear: both; margin: 0; }
+
+/* ---------- Gruppen ---------- */
+.scope-bar { display: flex; flex-wrap: wrap; justify-content: center; gap: .4rem; margin: 0 0 1rem; }
+.rcard-author { margin: .15rem 0 0; font-size: .8rem; font-weight: 700; color: var(--green); }
+.group-foot { margin-top: 1rem; display: flex; flex-direction: column; gap: .7rem; }
+.group-invite { clear: both; display: flex; gap: .5rem; }
+.group-invite input { flex: 1; min-width: 0; padding: .55rem .8rem; border: 1.5px solid var(--line); border-radius: 8px; background: var(--paper-2); color: var(--ink); }
+.group-invite input:focus { outline: none; border-color: var(--green); }
+.group-links { display: flex; justify-content: space-between; gap: 1rem; }
+.group-hint { margin: .8rem 0 0; font-size: .85rem; }
 #btn-logout .ic { color: var(--danger); }
 
 /* ---------- Kalender ---------- */

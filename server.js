@@ -116,6 +116,22 @@ if (!db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'size'
     try { setSize.run(fs.statSync(path.join(UPLOAD_DIR, path.basename(p.filename))).size, p.id); } catch {}
   }
 }
+// Gruppen: Mitglieder sehen gegenseitig ihre Rezepte (nur lesen). Wer eingeladen wird,
+// muss erst zustimmen (accepted = 1), vorher ist nichts sichtbar.
+db.exec(`
+CREATE TABLE IF NOT EXISTS user_groups (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  owner_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  accepted INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -333,12 +349,12 @@ app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Fotos nur für den Besitzer des Rezepts
+// Fotos nur für den Besitzer des Rezepts und seine Gruppenmitglieder
 app.use('/uploads', (req, res, next) => {
   if (!req.user) return res.status(401).end();
-  const owns = db.prepare(`SELECT 1 FROM photos p JOIN recipes r ON r.id = p.recipe_id
-                           WHERE p.filename = ? AND r.user_id = ?`).get(path.basename(req.path), req.user.id);
-  if (!owns) return res.status(404).end();
+  const row = db.prepare(`SELECT r.user_id FROM photos p JOIN recipes r ON r.id = p.recipe_id
+                          WHERE p.filename = ?`).get(path.basename(req.path));
+  if (!row || !canView(row.user_id, req.user.id)) return res.status(404).end();
   res.set('Cache-Control', 'private, max-age=2592000, immutable');
   next();
 }, express.static(UPLOAD_DIR, { cacheControl: false }));
@@ -363,9 +379,30 @@ const toList = (v) =>
 
 const normTag = (t) => t.trim().toLowerCase().replace(/^#/, '').replace(/\s+/g, ' ');
 
+// ---------- Gruppen / Sichtbarkeit ----------
+// Mitglieder (zugestimmt) einer Gruppe, sofern userId selbst zugestimmtes Mitglied ist, sonst null
+function groupMembers(groupId, userId) {
+  const ids = db.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND accepted = 1').all(groupId).map((r) => r.user_id);
+  return ids.includes(userId) ? ids : null;
+}
+// Darf userId die Rezepte von ownerId sehen? (eigene oder gemeinsame Gruppe)
+function canView(ownerId, userId) {
+  if (ownerId === userId) return true;
+  return !!db.prepare(`SELECT 1 FROM group_members a JOIN group_members b ON a.group_id = b.group_id
+                       WHERE a.user_id = ? AND a.accepted = 1 AND b.user_id = ? AND b.accepted = 1`).get(userId, ownerId);
+}
+// Ansicht: "mine" (eigene Rezepte) oder eine Gruppen-ID (Rezepte aller Mitglieder).
+// Ungültige Gruppe → eigene Rezepte.
+function resolveScope(scope, userId) {
+  const gid = parseInt(scope, 10);
+  const ids = Number.isFinite(gid) ? groupMembers(gid, userId) : null;
+  return ids ? { scope: String(gid), ids } : { scope: 'mine', ids: [userId] };
+}
+
 function buildFilter(q, userId) {
-  const where = ['r.user_id = ?'];
-  const params = [userId];
+  const { ids } = resolveScope(q.scope, userId);
+  const where = [`r.user_id IN (${ids.map(() => '?').join(',')})`];
+  const params = [...ids];
   for (const field of ['gang', 'zeit', 'preis', 'aufwand', 'kueche']) {
     const vals = toList(q[field]);
     if (vals.length) {
@@ -388,11 +425,27 @@ function buildFilter(q, userId) {
 }
 
 const LIST_COLUMNS = `
-  r.id, r.title, r.subtitle, r.description, r.gang, r.zeit, r.preis, r.aufwand, r.kueche, r.kcal, r.servings, r.ingredients, r.created_at,
+  r.id, r.user_id, r.title, r.subtitle, r.description, r.gang, r.zeit, r.preis, r.aufwand, r.kueche, r.kcal, r.servings, r.ingredients, r.created_at,
+  (SELECT username FROM users u WHERE u.id = r.user_id) AS author,
   (SELECT filename FROM photos p WHERE p.recipe_id = r.id ORDER BY position, id LIMIT 1) AS photo,
   (SELECT group_concat(tag, ',') FROM (SELECT tag FROM recipe_tags t WHERE t.recipe_id = r.id ORDER BY tag)) AS tags`;
 
-const rowToSummary = (r) => ({ ...r, tags: r.tags ? r.tags.split(',') : [] });
+const rowToSummary = (r, userId) => {
+  const { user_id, ...rest } = r;
+  return { ...rest, own: user_id === userId, tags: r.tags ? r.tags.split(',') : [] };
+};
+
+// Rezept zum Ansehen: eigenes oder eines aus einer gemeinsamen Gruppe
+function getViewable(id, userId) {
+  const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(id);
+  if (!row || !canView(row.user_id, userId)) return null;
+  const recipe = getRecipe(id, row.user_id);
+  recipe.own = row.user_id === userId;
+  recipe.author = db.prepare('SELECT username FROM users WHERE id = ?').get(row.user_id).username;
+  if (!recipe.own) delete recipe.share_token; // Freigabe-Link gehört dem Besitzer
+  delete recipe.user_id;
+  return recipe;
+}
 
 function getRecipe(id, userId) {
   const recipe = db.prepare('SELECT * FROM recipes WHERE id = ? AND user_id = ?').get(id, userId);
@@ -514,9 +567,12 @@ app.get('/api/public/:token/photos/:filename', (req, res) => {
 app.post('/api/public/:token/import', requireAuth, (req, res) => {
   const src = sharedRecipe(req.params.token);
   if (!src) return res.status(404).json({ error: 'Dieser Link ist ungültig oder wurde deaktiviert' });
-  const uid = req.user.id;
-  if (src.user_id === uid) return res.json({ id: src.id, own: true });
+  if (src.user_id === req.user.id) return res.json({ id: src.id, own: true });
+  res.status(201).json({ id: copyRecipe(src, req.user.id) });
+});
 
+// Rezept (inkl. Fotos und Tags) als neues Rezept bei uid anlegen, gibt die neue ID zurück
+function copyRecipe(src, uid) {
   // Fotos als eigene Dateien kopieren, damit sie unabhängig vom Original bleiben
   const copied = [];
   try {
@@ -525,7 +581,7 @@ app.post('/api/public/:token/import', requireAuth, (req, res) => {
       fs.copyFileSync(path.join(UPLOAD_DIR, path.basename(p.filename)), path.join(UPLOAD_DIR, filename));
       copied.push({ filename, size: fs.statSync(path.join(UPLOAD_DIR, filename)).size });
     }
-    const id = db.transaction(() => {
+    return db.transaction(() => {
       const data = { ...src, tags: src.tags };
       // Kategorie-Werte, die der Benutzer noch nicht hat, bei ihm anlegen
       for (const cat of CATEGORIES) {
@@ -537,12 +593,11 @@ app.post('/api/public/:token/import', requireAuth, (req, res) => {
       }
       return saveRecipe(null, uid, data, copied, []).id;
     })();
-    res.status(201).json({ id });
   } catch (err) {
     removeFiles(copied.map((f) => f.filename));
     throw err;
   }
-});
+}
 
 // ---------- API ----------
 app.use('/api', requireAuth);
@@ -567,14 +622,125 @@ app.delete('/api/recipes/:id/share', (req, res) => {
 
 app.get('/api/meta', (req, res) => {
   const uid = req.user.id;
+  const { scope, ids } = resolveScope(req.query.scope, uid);
+  const inIds = `r.user_id IN (${ids.map(() => '?').join(',')})`;
+  const options = userOptions(uid);
+  // Filter-Werte: eigene Werte + in der Gruppe verwendete Werte
+  const filterOptions = Object.fromEntries(CATEGORIES.map((cat) => {
+    const vals = [...options[cat]];
+    const lower = new Set(vals.map((v) => v.toLowerCase()));
+    if (scope !== 'mine') {
+      for (const { v } of db.prepare(`SELECT DISTINCT ${cat} AS v FROM recipes r WHERE ${inIds} AND ${cat} IS NOT NULL ORDER BY v`).all(...ids)) {
+        if (!lower.has(v.toLowerCase())) { lower.add(v.toLowerCase()); vals.push(v); }
+      }
+    }
+    return [cat, vals];
+  }));
   res.json({
     categories: CATEGORIES,
-    options: userOptions(uid),
+    options,
+    filterOptions,
+    scope,
+    groups: db.prepare(`SELECT g.id, g.name FROM user_groups g JOIN group_members m ON m.group_id = g.id
+                        WHERE m.user_id = ? AND m.accepted = 1 ORDER BY g.name COLLATE NOCASE`).all(uid),
+    invites: db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE user_id = ? AND accepted = 0').get(uid).n,
     tags: db.prepare(`SELECT t.tag AS name, COUNT(*) AS n FROM recipe_tags t JOIN recipes r ON r.id = t.recipe_id
-                      WHERE r.user_id = ? GROUP BY t.tag ORDER BY t.tag`).all(uid),
-    total: db.prepare('SELECT COUNT(*) AS n FROM recipes WHERE user_id = ?').get(uid).n,
+                      WHERE ${inIds} GROUP BY t.tag ORDER BY t.tag`).all(...ids),
+    total: db.prepare(`SELECT COUNT(*) AS n FROM recipes r WHERE ${inIds}`).get(...ids).n,
     storage: storageInfo(uid),
   });
+});
+
+// ---------- Gruppen verwalten ----------
+const groupJson = express.json({ limit: '10kb' });
+const MAX_GROUPS = 20;      // Gruppen, die ein Benutzer anlegen kann
+const MAX_MEMBERS = 30;     // Mitglieder (inkl. Einladungen) pro Gruppe
+
+app.get('/api/groups', (req, res) => {
+  const uid = req.user.id;
+  const groups = db.prepare(`SELECT g.id, g.name, g.owner_id FROM user_groups g JOIN group_members m ON m.group_id = g.id
+                             WHERE m.user_id = ? AND m.accepted = 1 ORDER BY g.name COLLATE NOCASE`).all(uid);
+  const members = db.prepare(`SELECT u.id, u.username, m.accepted FROM group_members m JOIN users u ON u.id = m.user_id
+                              WHERE m.group_id = ? ORDER BY m.accepted DESC, u.username COLLATE NOCASE`);
+  const invites = db.prepare(`SELECT g.id, g.name, o.username AS owner FROM group_members m JOIN user_groups g ON g.id = m.group_id
+                              JOIN users o ON o.id = g.owner_id WHERE m.user_id = ? AND m.accepted = 0`).all(uid);
+  res.json({
+    groups: groups.map((g) => ({
+      id: g.id, name: g.name, isOwner: g.owner_id === uid,
+      members: members.all(g.id).map((m) => ({ id: m.id, username: m.username, accepted: !!m.accepted, isOwner: m.id === g.owner_id })),
+    })),
+    invites,
+  });
+});
+
+const groupName = (v) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 60);
+const ownedGroup = (gid, uid) => db.prepare('SELECT id, name FROM user_groups WHERE id = ? AND owner_id = ?').get(gid, uid);
+
+app.post('/api/groups', groupJson, (req, res) => {
+  const uid = req.user.id;
+  const name = groupName(req.body?.name);
+  if (!name) return res.status(400).json({ error: 'Bitte einen Namen eingeben' });
+  if (db.prepare('SELECT COUNT(*) AS n FROM user_groups WHERE owner_id = ?').get(uid).n >= MAX_GROUPS) {
+    return res.status(400).json({ error: `Du kannst höchstens ${MAX_GROUPS} Gruppen anlegen` });
+  }
+  const id = db.transaction(() => {
+    const gid = db.prepare('INSERT INTO user_groups (name, owner_id) VALUES (?, ?)').run(name, uid).lastInsertRowid;
+    db.prepare('INSERT INTO group_members (group_id, user_id, accepted) VALUES (?, ?, 1)').run(gid, uid);
+    return gid;
+  })();
+  res.status(201).json({ id, name });
+});
+
+app.put('/api/groups/:id', groupJson, (req, res) => {
+  const name = groupName(req.body?.name);
+  if (!name) return res.status(400).json({ error: 'Bitte einen Namen eingeben' });
+  if (!ownedGroup(req.params.id, req.user.id)) return res.status(404).json({ error: 'Gruppe nicht gefunden' });
+  db.prepare('UPDATE user_groups SET name = ? WHERE id = ?').run(name, req.params.id);
+  res.json({ name });
+});
+
+app.delete('/api/groups/:id', (req, res) => {
+  if (!ownedGroup(req.params.id, req.user.id)) return res.status(404).json({ error: 'Gruppe nicht gefunden' });
+  db.prepare('DELETE FROM user_groups WHERE id = ?').run(req.params.id);
+  res.status(204).end();
+});
+
+// Benutzer einladen (nur Besitzer der Gruppe)
+app.post('/api/groups/:id/members', groupJson, (req, res) => {
+  const g = ownedGroup(req.params.id, req.user.id);
+  if (!g) return res.status(404).json({ error: 'Gruppe nicht gefunden' });
+  const username = String(req.body?.username ?? '').trim();
+  const user = db.prepare('SELECT id, username FROM users WHERE username = ? AND approved = 1').get(username);
+  if (!user) return res.status(404).json({ error: `Benutzer „${username}“ gibt es nicht` });
+  if (db.prepare('SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?').get(g.id, user.id)) {
+    return res.status(409).json({ error: `${user.username} ist schon in der Gruppe oder eingeladen` });
+  }
+  if (db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE group_id = ?').get(g.id).n >= MAX_MEMBERS) {
+    return res.status(400).json({ error: `Eine Gruppe kann höchstens ${MAX_MEMBERS} Mitglieder haben` });
+  }
+  db.prepare('INSERT INTO group_members (group_id, user_id, accepted) VALUES (?, ?, 0)').run(g.id, user.id);
+  res.status(201).json({ username: user.username });
+});
+
+// Einladung annehmen
+app.post('/api/groups/:id/accept', (req, res) => {
+  const info = db.prepare('UPDATE group_members SET accepted = 1 WHERE group_id = ? AND user_id = ? AND accepted = 0')
+    .run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Einladung nicht gefunden' });
+  res.status(204).end();
+});
+
+// Mitglied entfernen (Besitzer) bzw. selbst austreten / Einladung ablehnen
+app.delete('/api/groups/:id/members/:userId', (req, res) => {
+  const uid = req.user.id;
+  const target = Number(req.params.userId);
+  const g = db.prepare('SELECT id, owner_id FROM user_groups WHERE id = ?').get(req.params.id);
+  if (!g) return res.status(404).json({ error: 'Gruppe nicht gefunden' });
+  if (target === g.owner_id) return res.status(400).json({ error: 'Wer die Gruppe angelegt hat, kann sie nur löschen' });
+  if (target !== uid && g.owner_id !== uid) return res.status(403).json({ error: 'Nur wer die Gruppe angelegt hat, kann Mitglieder entfernen' });
+  const info = db.prepare('DELETE FROM group_members WHERE group_id = ? AND user_id = ?').run(g.id, target);
+  if (!info.changes) return res.status(404).json({ error: 'Mitglied nicht gefunden' });
+  res.status(204).end();
 });
 
 // ---------- Eigene Kategorie-Werte ----------
@@ -670,7 +836,7 @@ app.get('/api/recipes', (req, res) => {
   const { sql, params } = buildFilter(req.query, req.user.id);
   const order = req.query.sort === 'neu' ? 'r.created_at DESC, r.id DESC' : 'r.title COLLATE NOCASE';
   const rows = db.prepare(`SELECT ${LIST_COLUMNS} FROM recipes r ${sql} ORDER BY ${order}`).all(...params);
-  res.json(rows.map(rowToSummary));
+  res.json(rows.map((r) => rowToSummary(r, req.user.id)));
 });
 
 app.get('/api/recipes/random', (req, res) => {
@@ -687,13 +853,21 @@ app.get('/api/recipes/random', (req, res) => {
   }
   const row = db.prepare(`SELECT r.id FROM recipes r ${where} ORDER BY RANDOM() LIMIT 1`).get(...params);
   if (!row) return res.status(404).json({ error: 'Kein passendes Rezept gefunden' });
-  res.json(getRecipe(row.id, req.user.id));
+  res.json(getViewable(row.id, req.user.id));
 });
 
 app.get('/api/recipes/:id', (req, res) => {
-  const recipe = getRecipe(req.params.id, req.user.id);
+  const recipe = getViewable(req.params.id, req.user.id);
   if (!recipe) return res.status(404).json({ error: 'Rezept nicht gefunden' });
   res.json(recipe);
+});
+
+// Rezept eines Gruppenmitglieds ins eigene Kochbuch kopieren
+app.post('/api/recipes/:id/copy', (req, res) => {
+  const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(req.params.id);
+  if (!row || !canView(row.user_id, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  if (row.user_id === req.user.id) return res.status(400).json({ error: 'Das ist schon dein eigenes Rezept' });
+  res.status(201).json({ id: copyRecipe(getRecipe(req.params.id, row.user_id), req.user.id) });
 });
 
 function handleSave(req, res) {
