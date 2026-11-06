@@ -266,6 +266,7 @@ async function route() {
     const pending = ssTake('import');
     if (pending) return await importShared(pending);
     if (view === 'kategorien') renderCategories();
+    else if (view === 'kalender') await renderCalendar(id);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
     else if (view === 'edit') await renderForm(id);
@@ -363,7 +364,16 @@ function renderLogin(mode = 'login') {
   });
 }
 
+// Benutzermenü im Header
+const userMenu = $('#user-menu');
+const setMenu = (open) => { userMenu.hidden = !open; $('#btn-user').setAttribute('aria-expanded', String(open)); };
+$('#btn-user').addEventListener('click', (e) => { e.stopPropagation(); setMenu(userMenu.hidden); });
+document.addEventListener('click', (e) => { if (!e.target.closest('.user-menu')) setMenu(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMenu(false); closeSheet(); } });
+window.addEventListener('hashchange', () => { setMenu(false); closeSheet(); });
+
 $('#btn-logout').addEventListener('click', async () => {
+  setMenu(false);
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   auth = { ...auth, user: null };
   resetState();
@@ -696,6 +706,144 @@ async function renderDetail(id, { shared = false } = {}) {
   card.addEventListener('touchstart', onStart, { passive: true });
   card.addEventListener('touchend', onEnd);
   cleanup = () => document.removeEventListener('keydown', onKey);
+}
+
+// ================= Auswahlfenster (unten auf dem Handy, mittig am Desktop) =================
+function openSheet(html) {
+  const sheet = $('#sheet');
+  $('.sheet-panel', sheet).innerHTML = `<button class="sheet-x" aria-label="Schließen">×</button>${html}`;
+  sheet.hidden = false;
+  document.body.style.overflow = 'hidden';
+  $('#toast').hidden = true; // alte Meldung nicht über den Buttons stehen lassen
+  return $('.sheet-panel', sheet);
+}
+function closeSheet() {
+  const sheet = $('#sheet');
+  if (sheet.hidden) return;
+  sheet.hidden = true;
+  document.body.style.overflow = '';
+}
+$('#sheet').addEventListener('click', (e) => {
+  if (e.target.id === 'sheet' || e.target.closest('.sheet-x')) closeSheet();
+});
+
+// ================= Kalender =================
+const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const dayLabel = (day) => new Date(day + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
+
+async function renderCalendar(monthStr) {
+  const today = new Date();
+  const [y, m] = /^\d{4}-\d{2}$/.test(monthStr || '')
+    ? monthStr.split('-').map(Number)
+    : [today.getFullYear(), today.getMonth() + 1];
+  const first = new Date(y, m - 1, 1);
+  const last = new Date(y, m, 0);
+  const start = new Date(y, m - 1, 1 - ((first.getDay() + 6) % 7));            // Montag davor
+  const end = new Date(y, m - 1, last.getDate() + (6 - ((last.getDay() + 6) % 7))); // Sonntag danach
+  const plan = await api(`/api/plan?from=${ymd(start)}&to=${ymd(end)}`);
+  const byDay = Object.fromEntries(plan.map((e) => [e.day, e]));
+  const month = (yy, mm) => ymd(new Date(yy, mm - 1, 1)).slice(0, 7);
+  const todayStr = ymd(today);
+
+  let cells = '';
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const day = ymd(d);
+    const e = byDay[day];
+    const cls = ['cal-day', d.getMonth() !== m - 1 && 'out', day === todayStr && 'today', e && 'has'].filter(Boolean).join(' ');
+    cells += `<button class="${cls}" data-day="${day}" aria-label="${esc(dayLabel(day))}${e ? ': ' + esc(e.title) : ''}">
+      ${e ? (e.photo ? `<img src="${photoUrl(e.photo)}" alt="" loading="lazy">` : `<span class="cal-dot" style="--dc:${recipeColor(e.id)}"></span>`) : ''}
+      <span class="cal-num">${d.getDate()}</span>
+      ${e ? `<span class="cal-title">${esc(e.title)}</span>` : ''}
+    </button>`;
+  }
+
+  app.innerHTML = `
+  <section class="cal">
+    <div class="cal-head">
+      <h1>Kalender</h1>
+      <div class="cal-nav">
+        <a class="btn btn-outline cal-arrow" href="#/kalender/${month(y, m - 1)}" aria-label="Voriger Monat">${ICON.left}</a>
+        <span class="cal-month">${first.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })}</span>
+        <a class="btn btn-outline cal-arrow" href="#/kalender/${month(y, m + 1)}" aria-label="Nächster Monat">${ICON.right}</a>
+        <a class="link-btn cal-today" href="#/kalender">Heute</a>
+      </div>
+    </div>
+    <p class="muted cal-hint">Tag antippen, um ein Gericht zu planen.</p>
+    <div class="cal-grid">
+      ${WEEKDAYS.map((w) => `<div class="cal-wd">${w}</div>`).join('')}
+      ${cells}
+    </div>
+  </section>`;
+
+  const refresh = () => renderCalendar(monthStr);
+  $('.cal-grid').addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.cal-day');
+    if (btn) openDaySheet(btn.dataset.day, byDay[btn.dataset.day], refresh);
+  });
+}
+
+function openDaySheet(day, entry, refresh) {
+  if (!entry) return showRecipePicker(day, refresh);
+  const thumb = entry.photo
+    ? `<img src="${photoUrl(entry.photo)}" alt="">`
+    : `<span class="cal-dot" style="--dc:${recipeColor(entry.id)}"></span>`;
+  const panel = openSheet(`
+    <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
+    <a class="plan-recipe" href="#/r/${entry.id}">
+      <span class="plan-thumb">${thumb}</span>
+      <span class="plan-info"><b>${esc(entry.title)}</b><small>Rezept öffnen ›</small></span>
+    </a>
+    <div class="sheet-actions">
+      <button class="btn btn-outline" id="plan-change">Anderes Rezept wählen</button>
+      <button class="btn btn-ghost-danger" id="plan-remove">Entfernen</button>
+    </div>`);
+  $('#plan-change', panel).addEventListener('click', () => showRecipePicker(day, refresh));
+  $('#plan-remove', panel).addEventListener('click', async () => {
+    try {
+      await api('/api/plan/' + day, { method: 'DELETE' });
+      closeSheet();
+      toast('Entfernt');
+      refresh();
+    } catch (e) { toast(e.message, true); }
+  });
+}
+
+async function showRecipePicker(day, refresh) {
+  const panel = openSheet(`
+    <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
+    <input type="search" class="pick-search" placeholder="Rezept suchen…" autocomplete="off">
+    <div class="pick-list"><div class="loading">Lade…</div></div>`);
+  let list = [];
+  try { list = await api('/api/recipes?sort=titel'); } catch (e) { toast(e.message, true); return; }
+  const box = $('.pick-list', panel);
+  const draw = (q) => {
+    const hits = list.filter((r) => !q || (r.title + ' ' + (r.subtitle || '')).toLowerCase().includes(q.toLowerCase()));
+    box.innerHTML = !list.length
+      ? '<p class="muted">Noch keine Rezepte. <a href="#/neu">Erstes Rezept anlegen</a></p>'
+      : hits.length
+        ? hits.map((r) => `<button class="pick-item" data-id="${r.id}">
+            <span class="plan-thumb">${r.photo ? `<img src="${photoUrl(r.photo)}" alt="" loading="lazy">` : `<span class="cal-dot" style="--dc:${recipeColor(r.id)}"></span>`}</span>
+            <span class="plan-info"><b>${esc(r.title)}</b>${r.gang || r.zeit ? `<small>${esc([r.gang, r.zeit].filter(Boolean).join(' · '))}</small>` : ''}</span>
+          </button>`).join('')
+        : '<p class="muted">Kein Rezept gefunden.</p>';
+  };
+  draw('');
+  const search = $('.pick-search', panel);
+  search.addEventListener('input', () => draw(search.value.trim()));
+  if (window.matchMedia('(min-width: 641px)').matches) search.focus();
+  box.addEventListener('click', async (e) => {
+    const item = e.target.closest('.pick-item');
+    if (!item) return;
+    try {
+      const saved = await api('/api/plan/' + day, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipe_id: Number(item.dataset.id) }),
+      });
+      closeSheet();
+      toast(`${saved.title} eingeplant ✓`);
+      refresh();
+    } catch (err) { toast(err.message, true); }
+  });
 }
 
 // ================= Teilen =================

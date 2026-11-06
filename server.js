@@ -92,6 +92,13 @@ if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'gang
 if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'share_token')) {
   db.exec('ALTER TABLE recipes ADD COLUMN share_token TEXT');
 }
+db.exec(`
+CREATE TABLE IF NOT EXISTS meal_plan (
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  day       TEXT NOT NULL,                -- YYYY-MM-DD
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, day)
+);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -548,6 +555,37 @@ app.delete('/api/options', (req, res) => {
   })();
   if (n < 0) return res.status(404).json({ error: 'Wert nicht gefunden' });
   res.json({ recipes: n });
+});
+
+// ---------- Kalender / Essensplan (ein Rezept pro Tag) ----------
+const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) === d;
+const PLAN_SELECT = `
+  SELECT m.day, r.id, r.title,
+    (SELECT filename FROM photos p WHERE p.recipe_id = r.id ORDER BY position, id LIMIT 1) AS photo
+  FROM meal_plan m JOIN recipes r ON r.id = m.recipe_id AND r.user_id = m.user_id`;
+
+app.get('/api/plan', (req, res) => {
+  const { from, to } = req.query;
+  if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: 'Ungültiger Zeitraum' });
+  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day BETWEEN ? AND ? ORDER BY m.day`).all(req.user.id, from, to));
+});
+
+app.put('/api/plan/:day', express.json({ limit: '1kb' }), (req, res) => {
+  const { day } = req.params;
+  if (!isDay(day)) return res.status(400).json({ error: 'Ungültiges Datum' });
+  const recipeId = Number(req.body?.recipe_id);
+  if (!db.prepare('SELECT 1 FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user.id)) {
+    return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  }
+  db.prepare(`INSERT INTO meal_plan (user_id, day, recipe_id) VALUES (?, ?, ?)
+              ON CONFLICT (user_id, day) DO UPDATE SET recipe_id = excluded.recipe_id`).run(req.user.id, day, recipeId);
+  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day = ?`).get(req.user.id, day));
+});
+
+app.delete('/api/plan/:day', (req, res) => {
+  if (!isDay(req.params.day)) return res.status(400).json({ error: 'Ungültiges Datum' });
+  db.prepare('DELETE FROM meal_plan WHERE user_id = ? AND day = ?').run(req.user.id, req.params.day);
+  res.status(204).end();
 });
 
 app.get('/api/recipes', (req, res) => {
