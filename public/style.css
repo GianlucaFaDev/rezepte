@@ -55,7 +55,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .topbar { position: sticky; top: 0; z-index: 50; background: var(--paper); border-bottom: 1px solid var(--line); }
 .topbar-inner { max-width: 1200px; margin: 0 auto; padding: .6rem 16px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
 .logo { display: flex; align-items: center; gap: .5rem; font-weight: 800; font-size: 1.25rem; color: var(--ink); text-decoration: none; letter-spacing: -.01em; }
-.logo-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50% 50% 50% 8px; background: var(--leaf); font-size: 1.1rem; }
+.logo-mark { display: block; width: 38px; height: 38px; }
 .nav { display: flex; align-items: center; gap: .35rem; }
 .nav-link { background: none; border: 0; padding: .5rem .75rem; border-radius: 999px; color: var(--ink); text-decoration: none; font-weight: 600; cursor: pointer; }
 .nav-link:hover { background: var(--paper-2); }
@@ -301,7 +301,7 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .auth h1 { margin: .2rem 0 .3rem; font-size: 1.6rem; font-weight: 800; }
 .auth > .muted { margin: 0 0 1.4rem; }
 .auth .field { text-align: left; }
-.auth-ic { font-size: 2.6rem; }
+.auth-ic { display: block; width: 72px; height: 72px; margin: 0 auto; }
 .auth-submit { width: 100%; justify-content: center; padding: .7rem 1rem; }
 .auth-error { color: var(--danger); font-weight: 600; margin: 0 0 1rem; }
 .auth-switch { margin: 1.1rem 0 0; color: var(--muted); }

@@ -347,7 +347,7 @@ function renderLogin(mode = 'login', notice = '') {
   const canRegister = auth?.allowRegistration !== false;
   app.innerHTML = `
   <form class="auth panel" id="auth-form" novalidate>
-    <div class="auth-ic">🥕</div>
+    <img class="auth-ic" src="logo.svg" alt="">
     <h1>${reg ? 'Konto anlegen' : 'Anmelden'}</h1>
     <p class="muted">${ssGet('import') ? 'Melde dich an oder registriere dich, dann wird das geteilte Rezept in dein Kochbuch übernommen.'
       : reg ? 'Leg ein Konto für deine eigene Rezeptsammlung an. Neue Konten werden erst nach Bestätigung freigeschaltet.' : 'Melde dich an, um deine Rezepte zu sehen.'}</p>
