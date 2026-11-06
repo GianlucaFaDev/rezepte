@@ -46,6 +46,7 @@ body {
 a { color: var(--green); }
 img { display: block; max-width: 100%; }
 button, input, select, textarea { font: inherit; color: inherit; }
+.ic-dice { width: 1.35em; height: 1.35em; flex: none; display: inline-block; vertical-align: -.3em; }
 .ic { width: 1.15em; height: 1.15em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .muted { color: var(--muted); }
 .loading { padding: 4rem; text-align: center; color: var(--muted); }

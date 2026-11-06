@@ -65,6 +65,7 @@ const anyFilter = () => state.q || Object.values(state.f).some((s) => s.size);
 
 // ================= Icons =================
 const ICON = {
+  dice: document.querySelector('#btn-random .ic-dice').outerHTML, // Würfel aus index.html wiederverwenden
   clock: '<svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   chef: '<svg viewBox="0 0 24 24" class="ic"><path d="M6 14a4 4 0 1 1 1.6-7.7A4.5 4.5 0 0 1 16.4 6.3 4 4 0 1 1 18 14v6H6z"/><path d="M6 17h12"/></svg>',
   euro: '<svg viewBox="0 0 24 24" class="ic"><path d="M17 6.5A7 7 0 1 0 17 17.5"/><path d="M4 10h9M4 14h9"/></svg>',
@@ -499,7 +500,7 @@ async function renderList() {
           <option value="titel">A–Z</option>
           <option value="neu">Neueste</option>
         </select>
-        <button class="btn btn-outline" id="rnd-filter">🎲 <span class="hide-sm">Zufall aus Auswahl</span></button>
+        <button class="btn btn-outline" id="rnd-filter">${ICON.dice} <span class="hide-sm">Zufall aus Auswahl</span></button>
       </div>
     </div>
     <section id="cards"></section>`;
@@ -648,7 +649,7 @@ async function renderDetail(id, { shared = false } = {}) {
       ${shared ? `<div class="actions">
         <button class="btn btn-primary" id="import">+ Zu meinem Kochbuch hinzufügen</button>
       </div>` : r.own === false ? `<div class="actions">
-        ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
+        ${state.random ? `<button class="btn btn-outline" id="reroll">${ICON.dice} Nochmal würfeln</button>` : ''}
         ${r.myVersion
           ? `<a class="btn btn-outline" href="#/r/${r.myVersion}">Meine Version öffnen</a>`
           : '<button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>'}
@@ -656,7 +657,7 @@ async function renderDetail(id, { shared = false } = {}) {
           ? '<button class="btn btn-outline" id="unhide">Wieder einblenden</button>'
           : '<button class="btn btn-ghost-danger" id="hide" title="Für dich ausblenden, die Gruppe behält das Rezept">Ausblenden</button>'}
       </div>` : `<div class="actions">
-        ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
+        ${state.random ? `<button class="btn btn-outline" id="reroll">${ICON.dice} Nochmal würfeln</button>` : ''}
         <button class="btn btn-outline" id="share">${ICON.share} Teilen</button>
         <a class="btn btn-outline" href="#/edit/${r.id}">Bearbeiten</a>
         <button class="btn btn-ghost-danger" id="del">Löschen</button>
