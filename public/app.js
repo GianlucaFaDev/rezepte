@@ -185,12 +185,49 @@ function placeholder(id, cls = '') {
   return `<div class="ph ${cls}"><span class="ph-dot" style="--dc:${recipeColor(id)}"></span></div>`;
 }
 
-function openLightbox(src) {
+// Bildansicht mit Blättern (Pfeile, Pfeiltasten, Wischen)
+const lightbox = { list: [], i: 0 };
+function showLightbox() {
   const lb = $('#lightbox');
-  $('img', lb).src = src;
-  lb.hidden = false;
+  $('img', lb).src = lightbox.list[lightbox.i];
+  const multi = lightbox.list.length > 1;
+  $('.lb-prev', lb).hidden = $('.lb-next', lb).hidden = $('.lb-count', lb).hidden = !multi;
+  $('.lb-count', lb).textContent = `${lightbox.i + 1} / ${lightbox.list.length}`;
 }
-$('#lightbox').addEventListener('click', () => ($('#lightbox').hidden = true));
+function openLightbox(src, list = [src]) {
+  lightbox.list = list;
+  lightbox.i = Math.max(0, list.indexOf(src));
+  showLightbox();
+  $('#lightbox').hidden = false;
+}
+function stepLightbox(d) {
+  const n = lightbox.list.length;
+  if (n < 2) return;
+  lightbox.i = (lightbox.i + d + n) % n;
+  showLightbox();
+}
+const closeLightbox = () => ($('#lightbox').hidden = true);
+$('#lightbox').addEventListener('click', (e) => {
+  if (e.target.closest('.lb-prev')) stepLightbox(-1);
+  else if (e.target.closest('.lb-next')) stepLightbox(1);
+  else closeLightbox();
+});
+document.addEventListener('keydown', (e) => {
+  if ($('#lightbox').hidden) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft') stepLightbox(-1);
+  if (e.key === 'ArrowRight') stepLightbox(1);
+});
+{
+  let lbX = null;
+  $('#lightbox').addEventListener('touchstart', (e) => { lbX = e.touches[0].clientX; }, { passive: true });
+  $('#lightbox').addEventListener('touchend', (e) => {
+    if (lbX == null) return;
+    const dx = e.changedTouches[0].clientX - lbX;
+    lbX = null;
+    if (Math.abs(dx) > 50) { e.preventDefault(); stepLightbox(dx > 0 ? -1 : 1); }
+  });
+}
 
 async function resizeImage(file, max = 1800) {
   if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return file;
@@ -615,8 +652,7 @@ async function renderDetail(id, { shared = false } = {}) {
 
   const ingredients = parseIngredients(r.ingredients);
   const steps = parseSteps(r.instructions);
-  const stepPhotos = r.photos.slice(1);
-  const extraPhotos = stepPhotos.slice(steps.length);
+  const photoSrcs = r.photos.map((p) => photoUrl(p.filename));
   let portions = r.servings || null;
 
   const info = [
@@ -641,6 +677,7 @@ async function renderDetail(id, { shared = false } = {}) {
       ${recipeCard(r, { link: false, big: true })}
       ${nextId ? `<a class="flip-btn flip-next" href="#/r/${nextId}" title="Nächstes Rezept (→)">${ICON.right}</a>` : ''}
     </div>
+    ${photoSrcs.length > 1 ? `<div class="gallery" aria-label="Fotos">${photoSrcs.map((src, i) => `<button class="gallery-thumb" data-src="${src}" title="Foto ${i + 1}"><img loading="lazy" src="${src}" alt="Foto ${i + 1}"></button>`).join('')}</div>` : ''}
 
     <div class="detail-bar">
       <div class="tags">${r.tags.map((t) => shared
@@ -689,15 +726,12 @@ async function renderDetail(id, { shared = false } = {}) {
 
       <section class="sheet-steps">
         ${steps.length ? `<ol class="steps">${steps.map((s, i) => `
-          <li class="step${stepPhotos[i] ? '' : ' no-photo'}">
-            ${stepPhotos[i] ? `<button class="step-photo" data-src="${photoUrl(stepPhotos[i].filename)}"><img loading="lazy" src="${photoUrl(stepPhotos[i].filename)}" alt="Schritt ${i + 1}"></button>` : ''}
+          <li class="step no-photo">
             <div class="step-text"><span class="step-num">${i + 1}</span>${highlightStep(s, ingredients).replace(/\n/g, '<br>')}</div>
           </li>`).join('')}</ol>` : '<p class="muted">Noch keine Zubereitungsschritte eingetragen.</p>'}
         <p class="enjoy">Guten Appetit!</p>
       </section>
     </div>
-
-    ${extraPhotos.length ? `<section class="gallery">${extraPhotos.map((p) => `<button class="step-photo" data-src="${photoUrl(p.filename)}"><img loading="lazy" src="${photoUrl(p.filename)}" alt=""></button>`).join('')}</section>` : ''}
 
     <div class="pager">
       ${prevId ? `<a class="btn btn-outline" href="#/r/${prevId}">${ICON.left} Vorheriges</a>` : '<span></span>'}
@@ -719,8 +753,8 @@ async function renderDetail(id, { shared = false } = {}) {
   $('#p-plus')?.addEventListener('click', () => { if (portions < 50) { portions++; renderIngs(); } });
 
   // Fotos vergrößern
-  $('.rcard-big .rcard-photo img')?.addEventListener('click', (e) => openLightbox(e.target.src));
-  $$('.step-photo').forEach((b) => b.addEventListener('click', () => openLightbox(b.dataset.src)));
+  $('.rcard-big .rcard-photo img')?.addEventListener('click', () => openLightbox(photoSrcs[0], photoSrcs));
+  $$('.gallery-thumb').forEach((b) => b.addEventListener('click', () => openLightbox(b.dataset.src, photoSrcs)));
 
   // Tag anklicken → als Filter in der Übersicht
   $$('[data-tag]').forEach((b) => b.addEventListener('click', () => {
@@ -1336,7 +1370,7 @@ async function renderForm(id) {
 
     <fieldset class="panel">
       <legend>Fotos</legend>
-      <p class="hint">Das <b>erste Foto</b> ist das Titelbild der Karte. Weitere Fotos werden der Reihe nach den <b>Zubereitungsschritten</b> zugeordnet.</p>
+      <p class="hint">Das <b>erste Foto</b> ist das Titelbild der Karte. Weitere Fotos erscheinen in der <b>Galerie</b> unter dem Titelbild.</p>
       <div class="photo-grid" id="photo-grid"></div>
       <label class="dropzone" id="dropzone">
         <input type="file" id="f-photos" accept="image/*" multiple hidden>
@@ -1424,7 +1458,7 @@ async function renderForm(id) {
     ];
     let n = 0;
     $('#photo-grid').innerHTML = items.map((it) => {
-      const label = it.del ? 'wird gelöscht' : (n++ === 0 ? 'Titelbild' : `Schritt ${n - 1}`);
+      const label = it.del ? 'wird gelöscht' : (n++ === 0 ? 'Titelbild' : `Foto ${n}`);
       return `<div class="photo-item${it.del ? ' del' : ''}">
         <img src="${it.src}" alt="">
         <span class="photo-label">${label}${it.isNew ? ' · neu' : ''}</span>

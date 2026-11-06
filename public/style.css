@@ -236,7 +236,11 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .step-num { float: left; font-size: 2.3rem; font-weight: 800; line-height: .9; color: var(--leaf); margin: .1rem .45rem 0 0; font-variant-numeric: tabular-nums; }
 .enjoy { margin: 1.8rem 0 0; font-weight: 800; color: var(--green); font-size: 1.1rem; }
 
-.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: .7rem; margin-top: 1.2rem; }
+.gallery { display: flex; gap: .5rem; overflow-x: auto; padding: .2rem 0 .4rem; margin: .6rem 0 0; scrollbar-width: thin; }
+.gallery-thumb { flex: 0 0 auto; width: 96px; aspect-ratio: 1; padding: 0; border: 0; border-radius: 6px; overflow: hidden; cursor: zoom-in; background: rgba(127, 127, 127, .15); }
+.gallery-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .2s; }
+.gallery-thumb:hover img { transform: scale(1.06); }
+@media (max-width: 600px) { .gallery-thumb { width: 72px; } }
 .pager { display: flex; justify-content: space-between; margin-top: 1.6rem; }
 
 /* ---------- Formular ---------- */
@@ -276,6 +280,13 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .lightbox { position: fixed; inset: 0; background: rgba(0, 0, 0, .88); display: grid; place-items: center; z-index: 90; cursor: zoom-out; padding: 16px; }
 .lightbox[hidden] { display: none; }
 .lightbox img { max-width: 100%; max-height: 100%; border-radius: 4px; }
+.lb-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .15); color: #fff; display: grid; place-items: center; cursor: pointer; }
+.lb-btn:hover { background: rgba(255, 255, 255, .3); }
+.lb-btn[hidden], .lb-count[hidden] { display: none; }
+.lb-btn .ic { width: 26px; height: 26px; stroke: #fff; }
+.lb-prev { left: 12px; }
+.lb-next { right: 12px; }
+.lb-count { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); color: #fff; font-size: .9rem; background: rgba(0, 0, 0, .45); padding: .2rem .7rem; border-radius: 999px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {

@@ -38,7 +38,12 @@
   </header>
   <main id="app"><div class="loading">Lade…</div></main>
   <div id="toast" class="toast" hidden></div>
-  <div id="lightbox" class="lightbox" hidden><img alt=""></div>
+  <div id="lightbox" class="lightbox" hidden>
+    <img alt="">
+    <button class="lb-btn lb-prev" aria-label="Vorheriges Foto"><svg viewBox="0 0 24 24" class="ic"><path d="M15 6l-6 6 6 6"/></svg></button>
+    <button class="lb-btn lb-next" aria-label="Nächstes Foto"><svg viewBox="0 0 24 24" class="ic"><path d="M9 6l6 6-6 6"/></svg></button>
+    <span class="lb-count"></span>
+  </div>
   <div id="sheet" class="sheet-overlay" hidden><div class="sheet-panel" role="dialog" aria-modal="true"></div></div>
   <script src="app.js"></script>
 </body>

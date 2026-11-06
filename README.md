@@ -107,6 +107,6 @@ sqlite3 data/rezepte.db ".backup data/backup.db" && tar czf kochbuch-$(date +%F)
 
 - **Zutaten:** eine pro Zeile, Menge zuerst (`200 g Mehl`, `1½ TL Salz`). So funktioniert der Portionsrechner. Zeilen mit `:` am Ende sind Zwischenüberschriften.
 - **Zubereitung:** Schritte durch Leerzeilen trennen. Zutaten werden im Text automatisch fett, manuell geht es mit `**so**`.
-- **Fotos:** Das erste Foto ist das Titelbild, weitere Fotos werden der Reihe nach den Schritten zugeordnet. Große Handyfotos werden vor dem Hochladen automatisch verkleinert.
+- **Fotos:** Das erste Foto ist das Titelbild, weitere Fotos erscheinen als Galerie unter dem Titelbild (antippen zum Vergrößern und Durchblättern). Große Handyfotos werden vor dem Hochladen automatisch verkleinert.
 - **Blättern:** In der Detailansicht mit den Pfeilen, den Pfeiltasten ← → oder per Wischen auf dem Handy.
 - **Zufall:** 🎲 oben wählt aus allen Rezepten, „Zufall aus Auswahl“ nur aus den aktuell gefilterten.
