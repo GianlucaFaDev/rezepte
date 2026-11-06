@@ -15,10 +15,10 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 const CATEGORIES = ['gang', 'zeit', 'aufwand', 'preis', 'kueche'];
 const DEFAULT_OPTIONS = {
   gang: ['Vorspeise', 'Hauptspeise', 'Dessert'],
-  zeit: ['bis 15 Min', '15–30 Min', '30–60 Min', 'über 1 Std'],
+  zeit: ['15–30 Min', '30–60 Min', 'über 1 Std'],
   aufwand: ['einfach', 'mittel', 'aufwendig'],
   preis: ['günstig', 'mittel', 'teuer'],
-  kueche: ['Deutsch', 'Italienisch', 'Französisch', 'Spanisch', 'Griechisch', 'Asiatisch', 'Indisch', 'Mexikanisch', 'Orientalisch'],
+  kueche: ['Deutsch', 'Italienisch', 'Französisch'],
 };
 
 // ---------- Datenbank ----------
@@ -89,7 +89,11 @@ if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'option
 if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'gang')) {
   db.exec('ALTER TABLE recipes ADD COLUMN gang TEXT');
 }
+if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'share_token')) {
+  db.exec('ALTER TABLE recipes ADD COLUMN share_token TEXT');
+}
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
 // Standardwerte + bereits in Rezepten verwendete Werte einmalig pro Benutzer anlegen
 const seedOptions = db.transaction((userId) => {
@@ -398,8 +402,84 @@ const saveRecipe = db.transaction((id, userId, data, newFiles, deletePhotoIds) =
   return { id, removed };
 });
 
+// ---------- Öffentlich geteilte Rezepte (ohne Login, nur über den geheimen Link) ----------
+const SHARE_RE = /^[A-Za-z0-9_-]{32,64}$/;
+function sharedRecipe(token) {
+  if (!SHARE_RE.test(token)) return null;
+  const row = db.prepare('SELECT id, user_id FROM recipes WHERE share_token = ?').get(token);
+  return row ? getRecipe(row.id, row.user_id) : null;
+}
+
+app.get('/api/public/:token', (req, res) => {
+  res.set('X-Robots-Tag', 'noindex');
+  const r = sharedRecipe(req.params.token);
+  if (!r) return res.status(404).json({ error: 'Dieser Link ist ungültig oder wurde deaktiviert' });
+  const { user_id, share_token, ...pub } = r; // interne Felder nicht herausgeben
+  res.json(pub);
+});
+
+app.get('/api/public/:token/photos/:filename', (req, res) => {
+  const r = sharedRecipe(req.params.token);
+  const photo = r && r.photos.find((p) => p.filename === req.params.filename);
+  if (!photo) return res.status(404).end();
+  res.set({ 'X-Robots-Tag': 'noindex', 'Cache-Control': 'private, max-age=3600' });
+  res.sendFile(path.join(UPLOAD_DIR, path.basename(photo.filename)));
+});
+
+// Geteiltes Rezept ins eigene Kochbuch übernehmen (Kopie inkl. Fotos und Tags)
+app.post('/api/public/:token/import', requireAuth, (req, res) => {
+  const src = sharedRecipe(req.params.token);
+  if (!src) return res.status(404).json({ error: 'Dieser Link ist ungültig oder wurde deaktiviert' });
+  const uid = req.user.id;
+  if (src.user_id === uid) return res.json({ id: src.id, own: true });
+
+  // Fotos als eigene Dateien kopieren, damit sie unabhängig vom Original bleiben
+  const copied = [];
+  try {
+    for (const p of src.photos) {
+      const filename = crypto.randomBytes(12).toString('hex') + path.extname(p.filename);
+      fs.copyFileSync(path.join(UPLOAD_DIR, path.basename(p.filename)), path.join(UPLOAD_DIR, filename));
+      copied.push({ filename });
+    }
+    const id = db.transaction(() => {
+      const data = { ...src, tags: src.tags };
+      // Kategorie-Werte, die der Benutzer noch nicht hat, bei ihm anlegen
+      for (const cat of CATEGORIES) {
+        if (!src[cat]) continue;
+        const own = findOption(uid, cat, src[cat]);
+        if (own) { data[cat] = own.value; continue; }
+        const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM user_options WHERE user_id = ? AND category = ?').get(uid, cat).p;
+        db.prepare('INSERT INTO user_options (user_id, category, value, position) VALUES (?, ?, ?, ?)').run(uid, cat, src[cat], pos);
+      }
+      return saveRecipe(null, uid, data, copied, []).id;
+    })();
+    res.status(201).json({ id });
+  } catch (err) {
+    removeFiles(copied.map((f) => f.filename));
+    throw err;
+  }
+});
+
 // ---------- API ----------
 app.use('/api', requireAuth);
+
+// Freigabe-Link erzeugen (oder vorhandenen zurückgeben) bzw. deaktivieren
+app.post('/api/recipes/:id/share', (req, res) => {
+  const r = db.prepare('SELECT share_token FROM recipes WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!r) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  let token = r.share_token;
+  if (!token) {
+    token = crypto.randomBytes(24).toString('base64url');
+    db.prepare('UPDATE recipes SET share_token = ? WHERE id = ? AND user_id = ?').run(token, req.params.id, req.user.id);
+  }
+  res.json({ token });
+});
+
+app.delete('/api/recipes/:id/share', (req, res) => {
+  const info = db.prepare('UPDATE recipes SET share_token = NULL WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  res.status(204).end();
+});
 
 app.get('/api/meta', (req, res) => {
   const uid = req.user.id;

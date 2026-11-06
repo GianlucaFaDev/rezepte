@@ -335,3 +335,17 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .ing-ic { background: var(--dc); font-size: 0; width: 22px; height: 22px; margin: 6px 0; }
 .rcard-big .ing-ic { width: 28px; height: 28px; margin: 8px 0; }
 .ph-dot { width: 96px; height: 96px; border-radius: 50%; background: var(--dc); opacity: .85; }
+
+/* ---------- Teilen ---------- */
+.share-box { margin: 0 0 1.2rem; }
+.share-box[hidden] { display: none; }
+.share-h { margin: 0 0 .8rem; line-height: 1.45; }
+.share-row { display: flex; gap: .5rem; align-items: center; }
+.share-row input { flex: 1; min-width: 0; padding: .6rem .8rem; border: 1.5px solid var(--line); border-radius: 8px; background: var(--paper-2); color: var(--ink); font-size: .9rem; }
+.share-actions { justify-content: space-between; margin-top: .7rem; }
+.share-off { color: var(--danger); }
+.shared-note { font-weight: 700; color: var(--muted); }
+
+/* Eingabefeld für neue Werte direkt in der Chip-Reihe */
+.chip-add[hidden] { display: none; }
+.chip-input { width: 9.5rem; min-width: 0; font: inherit; font-size: .9rem; color: var(--ink); border-color: var(--green); background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--green-soft); cursor: text; }

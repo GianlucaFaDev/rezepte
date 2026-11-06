@@ -20,6 +20,11 @@ const state = {
   listScroll: 0,
 };
 
+function ssTake(k) {
+  try { const v = sessionStorage.getItem('kochbuch.' + k); sessionStorage.removeItem('kochbuch.' + k); return v; } catch { return null; }
+}
+function ssSet(k, v) { try { sessionStorage.setItem('kochbuch.' + k, v); } catch {} }
+function ssGet(k) { try { return sessionStorage.getItem('kochbuch.' + k); } catch { return null; } }
 function lsGet(k) { try { return localStorage.getItem('kochbuch.' + k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem('kochbuch.' + k, v); } catch {} }
 
@@ -68,6 +73,7 @@ const ICON = {
   right: '<svg viewBox="0 0 24 24" class="ic"><path d="M9 5l7 7-7 7"/></svg>',
   stack: '<svg viewBox="0 0 24 24" class="ic"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="9" rx="1"/></svg>',
   plate: '<svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="13" r="7"/><circle cx="12" cy="13" r="3.5"/><path d="M3 4v5M3 9v11M21 4c-1.5 1-2 3-2 5h2v11"/></svg>',
+  share: '<svg viewBox="0 0 24 24" class="ic"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.9l7.6-4.6M8.2 13.1l7.6 4.6"/></svg>',
   grid: '<svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>',
 };
 
@@ -165,7 +171,12 @@ function highlightStep(text, ingredients) {
 }
 
 // ================= Bilder =================
-function photoUrl(f) { return '/uploads/' + encodeURIComponent(f); }
+let shareToken = null; // gesetzt, solange ein geteiltes Rezept angezeigt wird
+function photoUrl(f) {
+  return shareToken
+    ? `/api/public/${encodeURIComponent(shareToken)}/photos/${encodeURIComponent(f)}`
+    : '/uploads/' + encodeURIComponent(f);
+}
 
 function placeholder(id, cls = '') {
   return `<div class="ph ${cls}"><span class="ph-dot" style="--dc:${recipeColor(id)}"></span></div>`;
@@ -242,18 +253,27 @@ function recipeCard(r, { link = true, big = false } = {}) {
 async function route() {
   if (cleanup) { cleanup(); cleanup = null; }
   const [, view, id] = (location.hash.slice(1) || '/').split('/');
+  shareToken = view === 's' ? id : null;
+  if (!shareToken) document.title = 'Kochbuch';
   try {
+    // Geteiltes Rezept: ohne Login sichtbar
     if (!auth) auth = await api('/api/auth/me');
+    if (shareToken) { showUser(); return await renderDetail(null, { shared: true }); }
     if (!auth.user) return renderLogin();
     showUser();
     if (!meta) { meta = await api('/api/meta'); pruneFilters(); }
+    // Nach dem Login: vorgemerktes geteiltes Rezept übernehmen
+    const pending = ssTake('import');
+    if (pending) return await importShared(pending);
     if (view === 'kategorien') renderCategories();
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
     else if (view === 'edit') await renderForm(id);
     else await renderList();
   } catch (e) {
-    app.innerHTML = `<div class="empty"><p>${esc(e.message)}</p><a class="btn" href="#/">Zur Übersicht</a></div>`;
+    app.innerHTML = shareToken
+      ? `<div class="empty"><div class="empty-ic">🔗</div><h2>Rezept nicht verfügbar</h2><p>${esc(e.message)}</p></div>`
+      : `<div class="empty"><p>${esc(e.message)}</p><a class="btn" href="#/">Zur Übersicht</a></div>`;
   }
 }
 window.addEventListener('hashchange', route);
@@ -295,7 +315,8 @@ function renderLogin(mode = 'login') {
   <form class="auth panel" id="auth-form" novalidate>
     <div class="auth-ic">🥕</div>
     <h1>${reg ? 'Konto anlegen' : 'Anmelden'}</h1>
-    <p class="muted">${reg ? 'Leg ein Konto für deine eigene Rezeptsammlung an.' : 'Melde dich an, um deine Rezepte zu sehen.'}</p>
+    <p class="muted">${ssGet('import') ? 'Melde dich an oder registriere dich, dann wird das geteilte Rezept in dein Kochbuch übernommen.'
+      : reg ? 'Leg ein Konto für deine eigene Rezeptsammlung an.' : 'Melde dich an, um deine Rezepte zu sehen.'}</p>
     <div class="field">
       <label for="a-user">Benutzername</label>
       <input id="a-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
@@ -367,8 +388,35 @@ function pruneFilters() {
 }
 
 // Neuen Wert in einer Kategorie anlegen (gibt den gespeicherten Wert zurück oder null)
-async function addOption(category) {
-  const value = prompt(`Neuer Wert für „${CAT_LABELS[category]}“:`)?.trim();
+// Kleines Eingabefeld direkt an Stelle des "+ Neu"-Chips (Enter speichert, Esc bricht ab)
+function askInline(btn, placeholder) {
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.className = 'chip chip-input';
+    inp.placeholder = placeholder;
+    inp.maxLength = 40;
+    inp.enterKeyHint = 'done';
+    btn.hidden = true;
+    btn.after(inp);
+    inp.focus();
+    let done = false;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      inp.remove();
+      btn.hidden = false;
+      resolve(v);
+    };
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(inp.value.trim() || null); }
+      if (e.key === 'Escape') finish(null);
+    });
+    inp.addEventListener('blur', () => finish(inp.value.trim() || null));
+  });
+}
+
+async function addOption(category, btn) {
+  const value = await askInline(btn, CAT_LABELS[category] + '…');
   if (!value) return null;
   try {
     const res = await api('/api/options', {
@@ -440,13 +488,19 @@ function renderFilters() {
   if (!el) return;
   el.innerHTML = GROUPS.map(([key, label, opts]) => {
     const o = opts();
-    if (!o.length) return '';
+    if (!o.length && key === 'tags') return '';
     return `<div class="fgroup"><span class="flabel">${label}</span><div class="chips">${o
       .map(([v, l]) => `<button class="chip${state.f[key].has(v) ? ' on' : ''}" data-k="${key}" data-v="${esc(v)}">${esc(l)}</button>`)
-      .join('')}</div></div>`;
+      .join('')}${key === 'tags' ? '' : `<button class="chip chip-add" data-add="${key}" title="Neuen Wert anlegen">+ Neu</button>`}</div></div>`;
   }).join('') + `<div class="filters-foot">${anyFilter() ? '<button class="link-btn" id="reset">× Filter zurücksetzen</button>' : '<span></span>'}
     <a class="link-btn" href="#/kategorien">⚙ Kategorien verwalten</a></div>`;
-  el.onclick = (e) => {
+  el.onclick = async (e) => {
+    if (e.target.closest('.chip-input')) return;
+    const add = e.target.closest('.chip-add');
+    if (add) {
+      if (await addOption(add.dataset.add, add)) renderFilters();
+      return;
+    }
     const b = e.target.closest('.chip');
     if (b) {
       const s = state.f[b.dataset.k];
@@ -481,15 +535,18 @@ async function loadCards() {
 }
 
 // ================= Detailansicht =================
-async function renderDetail(id) {
-  const r = await api('/api/recipes/' + encodeURIComponent(id));
+async function renderDetail(id, { shared = false } = {}) {
+  const r = shared
+    ? await api('/api/public/' + encodeURIComponent(shareToken))
+    : await api('/api/recipes/' + encodeURIComponent(id));
   window.scrollTo(0, 0);
+  if (shared) document.title = r.title + ' · Kochbuch';
 
-  // Trefferliste zum Blättern sicherstellen
-  if (!state.ids.length) {
+  // Trefferliste zum Blättern sicherstellen (nicht bei geteilten Rezepten)
+  if (!shared && !state.ids.length) {
     try { state.ids = (await api('/api/recipes?' + filterParams())).map((x) => x.id); } catch {}
   }
-  const idx = state.ids.indexOf(r.id);
+  const idx = shared ? -1 : state.ids.indexOf(r.id);
   const prevId = idx > 0 ? state.ids[idx - 1] : null;
   const nextId = idx >= 0 && idx < state.ids.length - 1 ? state.ids[idx + 1] : null;
 
@@ -511,7 +568,7 @@ async function renderDetail(id) {
   app.innerHTML = `
   <article class="detail">
     <div class="detail-nav">
-      <a href="#/" class="back">${ICON.left} Alle Rezepte</a>
+      ${shared ? '<span class="shared-note">Geteiltes Rezept</span>' : `<a href="#/" class="back">${ICON.left} Alle Rezepte</a>`}
       ${idx >= 0 ? `<span class="pos">${idx + 1} / ${state.ids.length}</span>` : ''}
     </div>
 
@@ -522,13 +579,19 @@ async function renderDetail(id) {
     </div>
 
     <div class="detail-bar">
-      <div class="tags">${r.tags.map((t) => `<button class="chip chip-sm" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>
-      <div class="actions">
+      <div class="tags">${r.tags.map((t) => shared
+        ? `<span class="chip chip-sm">#${esc(t)}</span>`
+        : `<button class="chip chip-sm" data-tag="${esc(t)}">#${esc(t)}</button>`).join('')}</div>
+      ${shared ? `<div class="actions">
+        <button class="btn btn-primary" id="import">+ Zu meinem Kochbuch hinzufügen</button>
+      </div>` : `<div class="actions">
         ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
+        <button class="btn btn-outline" id="share">${ICON.share} Teilen</button>
         <a class="btn btn-outline" href="#/edit/${r.id}">Bearbeiten</a>
         <button class="btn btn-ghost-danger" id="del">Löschen</button>
-      </div>
+      </div>`}
     </div>
+    <div id="share-box" class="share-box panel" hidden></div>
 
     ${info.length ? `<div class="infobar">${info.map(([ic, l, v]) => `<div class="info"><span class="info-ic">${ic}</span><div><small>${l}</small><strong>${esc(v)}</strong></div></div>`).join('')}</div>` : ''}
     ${r.description ? `<p class="desc">${esc(r.description).replace(/\n/g, '<br>')}</p>` : ''}
@@ -594,7 +657,14 @@ async function renderDetail(id) {
   }));
 
   $('#reroll')?.addEventListener('click', () => goRandom(state.randomFiltered));
-  $('#del').addEventListener('click', async () => {
+  $('#share')?.addEventListener('click', () => openShareBox(r));
+  $('#import')?.addEventListener('click', () => {
+    if (auth?.user) return importShared(shareToken);
+    // Erst einloggen/registrieren, danach wird das Rezept automatisch übernommen
+    ssSet('import', shareToken);
+    location.hash = '#/';
+  });
+  $('#del')?.addEventListener('click', async () => {
     if (!confirm(`„${r.title}“ wirklich löschen?`)) return;
     try {
       await api('/api/recipes/' + r.id, { method: 'DELETE' });
@@ -628,6 +698,60 @@ async function renderDetail(id) {
   cleanup = () => document.removeEventListener('keydown', onKey);
 }
 
+// ================= Teilen =================
+const shareUrl = (token) => `${location.origin}${location.pathname}#/s/${token}`;
+
+async function openShareBox(r) {
+  const box = $('#share-box');
+  if (!box.hidden) { box.hidden = true; return; }
+  try {
+    if (!r.share_token) r.share_token = (await api(`/api/recipes/${r.id}/share`, { method: 'POST' })).token;
+  } catch (e) { toast(e.message, true); return; }
+  const url = shareUrl(r.share_token);
+  box.innerHTML = `
+    <p class="share-h"><b>Link zum Teilen</b><br><span class="muted">Jeder mit diesem Link kann genau dieses Rezept ansehen, ohne Login und ohne es ändern zu können.</span></p>
+    <div class="share-row">
+      <input id="share-url" readonly value="${esc(url)}" aria-label="Link zum Rezept">
+      <button class="btn btn-primary" id="share-copy">Kopieren</button>
+    </div>
+    <div class="share-row share-actions">
+      ${navigator.share ? '<button class="btn btn-outline" id="share-native">Teilen über …</button>' : '<span></span>'}
+      <button class="link-btn share-off" id="share-off">Link deaktivieren</button>
+    </div>`;
+  box.hidden = false;
+  const input = $('#share-url');
+  $('#share-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(url); }
+    catch { input.select(); document.execCommand('copy'); }
+    toast('Link kopiert ✓');
+  });
+  $('#share-native')?.addEventListener('click', () => navigator.share({ title: r.title, url }).catch(() => {}));
+  $('#share-off').addEventListener('click', async () => {
+    if (!confirm('Link deaktivieren? Wer den Link hat, kann das Rezept dann nicht mehr öffnen.')) return;
+    try {
+      await api(`/api/recipes/${r.id}/share`, { method: 'DELETE' });
+      r.share_token = null;
+      box.hidden = true;
+      toast('Link deaktiviert');
+    } catch (e) { toast(e.message, true); }
+  });
+  input.addEventListener('focus', () => input.select());
+}
+
+async function importShared(token) {
+  try {
+    const res = await api(`/api/public/${encodeURIComponent(token)}/import`, { method: 'POST' });
+    meta = null;
+    state.ids = [];
+    toast(res.own ? 'Das ist schon dein eigenes Rezept' : 'Zu deinem Kochbuch hinzugefügt ✓');
+    document.title = 'Kochbuch';
+    location.hash = '#/r/' + res.id;
+  } catch (e) {
+    toast(e.message, true);
+    if (!location.hash.startsWith('#/s/')) location.hash = '#/';
+  }
+}
+
 // ================= Kategorien verwalten =================
 function renderCategories() {
   window.scrollTo(0, 0);
@@ -654,8 +778,9 @@ function renderCategories() {
     const category = panel.dataset.cat;
     const json = (method, body, qs = '') => api('/api/options' + qs, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
     try {
+      if (e.target.closest('.chip-input')) return;
       if (e.target.closest('.chip-add')) {
-        if (await addOption(category)) renderCategories();
+        if (await addOption(category, e.target.closest('.chip-add'))) renderCategories();
       } else if (e.target.closest('.cat-rename')) {
         const from = e.target.closest('.cat-rename').dataset.v;
         const value = prompt(`„${from}“ umbenennen in:`, from)?.trim();
@@ -694,7 +819,7 @@ async function renderForm(id) {
       <label>${label}</label>
       <div class="chips choice" data-field="${field}">
         ${(meta.options[field] || []).map((v) => `<button type="button" class="chip${r[field] === v ? ' on' : ''}" data-v="${esc(v)}">${esc(v)}</button>`).join('')}
-        <button type="button" class="chip chip-add" title="Eigenen Wert anlegen">+ Eigene</button>
+        <button type="button" class="chip chip-add" title="Eigenen Wert anlegen">+ Neu</button>
       </div>
       <input type="hidden" name="${field}" value="${esc(r[field] || '')}">
     </div>`;
@@ -723,7 +848,7 @@ async function renderForm(id) {
         ${choice('preis', 'Preis')}
       </div>
       ${choice('kueche', 'Küche')}
-      <p class="hint">Eigene Werte mit <b>+ Eigene</b> anlegen, umbenennen oder löschen unter <a href="#/kategorien">Kategorien verwalten</a>.</p>
+      <p class="hint">Fehlt ein Wert? Einfach <b>+ Neu</b> antippen. Umbenennen oder löschen unter <a href="#/kategorien">Kategorien verwalten</a>.</p>
       <div class="row2">
         <div class="field">
           <label for="f-serv">Portionen</label>
@@ -794,8 +919,9 @@ async function renderForm(id) {
   // Auswahl-Chips (Zeit/Aufwand/Preis): Klick wählt, erneuter Klick hebt auf
   $$('.choice').forEach((group) => group.addEventListener('click', async (e) => {
     const input = $(`input[name="${group.dataset.field}"]`);
+    if (e.target.closest('.chip-input')) return;
     if (e.target.closest('.chip-add')) {
-      const value = await addOption(group.dataset.field);
+      const value = await addOption(group.dataset.field, e.target.closest('.chip-add'));
       if (!value) return;
       $$('.chip', group).forEach((c) => c.classList.remove('on'));
       const chip = document.createElement('button');
