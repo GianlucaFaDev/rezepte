@@ -647,7 +647,9 @@ async function renderDetail(id, { shared = false } = {}) {
         <button class="btn btn-primary" id="import">+ Zu meinem Kochbuch hinzufügen</button>
       </div>` : r.own === false ? `<div class="actions">
         ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
-        <button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>
+        ${r.myVersion
+          ? `<a class="btn btn-outline" href="#/r/${r.myVersion}">Meine Version öffnen</a>`
+          : '<button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>'}
       </div>` : `<div class="actions">
         ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
         <button class="btn btn-outline" id="share">${ICON.share} Teilen</button>
@@ -727,7 +729,7 @@ async function renderDetail(id, { shared = false } = {}) {
       const res = await api(`/api/recipes/${r.id}/copy`, { method: 'POST' });
       meta = null;
       state.ids = [];
-      toast('In dein Kochbuch kopiert ✓');
+      toast(res.existing ? 'Du hast schon eine Version davon' : 'In dein Kochbuch kopiert ✓');
       location.hash = '#/r/' + res.id;
     } catch (err) { toast(err.message, true); e.target.disabled = false; }
   });
@@ -879,7 +881,7 @@ async function showRecipePicker(day, refresh) {
     <input type="search" class="pick-search" placeholder="Rezept suchen…" autocomplete="off">
     <div class="pick-list"><div class="loading">Lade…</div></div>`);
   let list = [];
-  try { list = await api('/api/recipes?sort=titel'); } catch (e) { toast(e.message, true); return; }
+  try { list = await api('/api/recipes?sort=titel&scope=all'); } catch (e) { toast(e.message, true); return; }
   const box = $('.pick-list', panel);
   const draw = (q) => {
     const hits = list.filter((r) => !q || (r.title + ' ' + (r.subtitle || '')).toLowerCase().includes(q.toLowerCase()));
@@ -888,7 +890,10 @@ async function showRecipePicker(day, refresh) {
       : hits.length
         ? hits.map((r) => `<button class="pick-item" data-id="${r.id}">
             <span class="plan-thumb">${r.photo ? `<img src="${photoUrl(r.photo)}" alt="" loading="lazy">` : `<span class="cal-dot" style="--dc:${recipeColor(r.id)}"></span>`}</span>
-            <span class="plan-info"><b>${esc(r.title)}</b>${r.gang || r.zeit ? `<small>${esc([r.gang, r.zeit].filter(Boolean).join(' · '))}</small>` : ''}</span>
+            <span class="plan-info"><b>${esc(r.title)}</b>${(() => {
+              const sub = [r.gang, r.zeit, r.own === false && r.author ? 'von ' + r.author : ''].filter(Boolean).join(' · ');
+              return sub ? `<small>${esc(sub)}</small>` : '';
+            })()}</span>
           </button>`).join('')
         : '<p class="muted">Kein Rezept gefunden.</p>';
   };
@@ -1082,7 +1087,7 @@ async function renderGroups() {
       <a href="#/" class="back">${ICON.left} Zurück</a>
       <h1>Gruppen</h1>
       <p class="muted">In einer Gruppe sieht jedes Mitglied die Rezepte der anderen (nur lesen, kopieren ins eigene Kochbuch geht).
-        Umschalten kannst du oben in der Übersicht. Kalender und Kategorien bleiben privat.</p>
+        Umschalten kannst du oben in der Übersicht. Gruppenrezepte lassen sich auch im Kalender einplanen. Kategorien und Kalender bleiben privat.</p>
     </div>
     ${invites.length ? `<fieldset class="panel">
       <legend>Einladungen</legend>

@@ -69,7 +69,9 @@ Wer gar keine neuen Konten möchte: `ALLOW_REGISTRATION=false` setzen.
 **Gruppen:** Unter Benutzermenü → „Gruppen“ kann jeder eine Gruppe anlegen und andere per Benutzername
 einladen. Erst wenn die Einladung angenommen ist, sehen sich die Mitglieder gegenseitig ihre Rezepte
 (nur lesen; „In mein Kochbuch kopieren“ legt eine eigene Kopie an). In der Übersicht schaltet man
-zwischen „Meine Rezepte“ und den Gruppen um. Kalender und Kategorien bleiben privat.
+zwischen „Meine Rezepte“ und den Gruppen um. Hat man ein Rezept kopiert, zeigt die Gruppe nur noch die
+eigene Kopie statt des Originals an (keine Doppelten). Gruppenrezepte können auch im Kalender eingeplant
+werden; Kalender und Kategorien selbst bleiben privat.
 ## Von außen erreichbar machen
 
 Hinter einem Reverse-Proxy (Caddy, nginx, Traefik) **`TRUST_PROXY` setzen**, sonst sieht die App

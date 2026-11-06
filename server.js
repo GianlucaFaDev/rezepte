@@ -132,6 +132,15 @@ CREATE TABLE IF NOT EXISTS group_members (
   PRIMARY KEY (group_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);`);
+// Migration: Herkunft kopierter Rezepte (ID des Originals), damit Kopien in Gruppen nicht doppelt erscheinen.
+// Bereits vorhandene Kopien werden an gleichem Titel + gleichen Zutaten bei einem anderen Benutzer erkannt.
+if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'copied_from')) {
+  db.exec(`ALTER TABLE recipes ADD COLUMN copied_from INTEGER REFERENCES recipes(id) ON DELETE SET NULL;
+           UPDATE recipes SET copied_from = (
+             SELECT o.id FROM recipes o WHERE o.user_id != recipes.user_id AND o.title = recipes.title
+               AND o.ingredients = recipes.ingredients AND o.id < recipes.id ORDER BY o.id LIMIT 1);`);
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_copied ON recipes(copied_from)');
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -391,18 +400,39 @@ function canView(ownerId, userId) {
   return !!db.prepare(`SELECT 1 FROM group_members a JOIN group_members b ON a.group_id = b.group_id
                        WHERE a.user_id = ? AND a.accepted = 1 AND b.user_id = ? AND b.accepted = 1`).get(userId, ownerId);
 }
-// Ansicht: "mine" (eigene Rezepte) oder eine Gruppen-ID (Rezepte aller Mitglieder).
-// Ungültige Gruppe → eigene Rezepte.
+// Ansicht: "mine" (eigene Rezepte), eine Gruppen-ID (Rezepte aller Mitglieder) oder
+// "all" (eigene + alle Gruppen, z. B. für den Kalender). Ungültige Gruppe → eigene Rezepte.
 function resolveScope(scope, userId) {
+  if (scope === 'all') {
+    const ids = db.prepare(`SELECT DISTINCT b.user_id AS id FROM group_members a JOIN group_members b ON a.group_id = b.group_id
+                            WHERE a.user_id = ? AND a.accepted = 1 AND b.accepted = 1`).all(userId).map((r) => r.id);
+    return { scope: 'all', ids: [...new Set([userId, ...ids])] };
+  }
   const gid = parseInt(scope, 10);
   const ids = Number.isFinite(gid) ? groupMembers(gid, userId) : null;
   return ids ? { scope: String(gid), ids } : { scope: 'mine', ids: [userId] };
 }
 
+// Die eigene Version eines Rezepts (Original oder Kopie derselben Herkunft), sonst null
+function myVersion(recipe, userId) {
+  const root = recipe.copied_from ?? recipe.id;
+  return db.prepare('SELECT id FROM recipes WHERE user_id = ? AND (id = ? OR copied_from = ?) ORDER BY id LIMIT 1')
+    .get(userId, root, root)?.id ?? null;
+}
+
 function buildFilter(q, userId) {
   const { ids } = resolveScope(q.scope, userId);
-  const where = [`r.user_id IN (${ids.map(() => '?').join(',')})`];
+  const inIds = ids.map(() => '?').join(',');
+  const where = [`r.user_id IN (${inIds})`];
   const params = [...ids];
+  if (ids.length > 1) {
+    // Doppelte vermeiden: fremde Kopien ausblenden, deren Original sichtbar ist, und fremde Rezepte,
+    // von denen der Benutzer selbst eine Version hat (dann wird seine eigene angezeigt).
+    where.push(`(r.user_id = ? OR (
+      NOT (r.copied_from IS NOT NULL AND EXISTS (SELECT 1 FROM recipes o WHERE o.id = r.copied_from AND o.user_id IN (${inIds})))
+      AND NOT EXISTS (SELECT 1 FROM recipes c WHERE c.user_id = ? AND (c.id = r.copied_from OR c.copied_from = COALESCE(r.copied_from, r.id)))))`);
+    params.push(userId, ...ids, userId);
+  }
   for (const field of ['gang', 'zeit', 'preis', 'aufwand', 'kueche']) {
     const vals = toList(q[field]);
     if (vals.length) {
@@ -442,8 +472,12 @@ function getViewable(id, userId) {
   const recipe = getRecipe(id, row.user_id);
   recipe.own = row.user_id === userId;
   recipe.author = db.prepare('SELECT username FROM users WHERE id = ?').get(row.user_id).username;
-  if (!recipe.own) delete recipe.share_token; // Freigabe-Link gehört dem Besitzer
+  if (!recipe.own) {
+    delete recipe.share_token; // Freigabe-Link gehört dem Besitzer
+    recipe.myVersion = myVersion(recipe, userId);
+  }
   delete recipe.user_id;
+  delete recipe.copied_from;
   return recipe;
 }
 
@@ -551,7 +585,7 @@ app.get('/api/public/:token', (req, res) => {
   res.set('X-Robots-Tag', 'noindex');
   const r = sharedRecipe(req.params.token);
   if (!r) return res.status(404).json({ error: 'Dieser Link ist ungültig oder wurde deaktiviert' });
-  const { user_id, share_token, ...pub } = r; // interne Felder nicht herausgeben
+  const { user_id, share_token, copied_from, ...pub } = r; // interne Felder nicht herausgeben
   res.json(pub);
 });
 
@@ -568,6 +602,8 @@ app.post('/api/public/:token/import', requireAuth, (req, res) => {
   const src = sharedRecipe(req.params.token);
   if (!src) return res.status(404).json({ error: 'Dieser Link ist ungültig oder wurde deaktiviert' });
   if (src.user_id === req.user.id) return res.json({ id: src.id, own: true });
+  const existing = myVersion(src, req.user.id);
+  if (existing) return res.json({ id: existing, own: true });
   res.status(201).json({ id: copyRecipe(src, req.user.id) });
 });
 
@@ -591,7 +627,10 @@ function copyRecipe(src, uid) {
         const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM user_options WHERE user_id = ? AND category = ?').get(uid, cat).p;
         db.prepare('INSERT INTO user_options (user_id, category, value, position) VALUES (?, ?, ?, ?)').run(uid, cat, src[cat], pos);
       }
-      return saveRecipe(null, uid, data, copied, []).id;
+      const id = saveRecipe(null, uid, data, copied, []).id;
+      // Herkunft merken (immer das ursprüngliche Original, auch bei Kopie einer Kopie)
+      db.prepare('UPDATE recipes SET copied_from = ? WHERE id = ?').run(src.copied_from ?? src.id, id);
+      return id;
     })();
   } catch (err) {
     removeFiles(copied.map((f) => f.filename));
@@ -804,26 +843,35 @@ app.delete('/api/options', (req, res) => {
 // ---------- Kalender / Essensplan (ein Rezept pro Tag) ----------
 const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) === d;
 const PLAN_SELECT = `
-  SELECT m.day, r.id, r.title,
+  SELECT m.day, r.id, r.title, r.user_id AS owner,
     (SELECT filename FROM photos p WHERE p.recipe_id = r.id ORDER BY position, id LIMIT 1) AS photo
-  FROM meal_plan m JOIN recipes r ON r.id = m.recipe_id AND r.user_id = m.user_id`;
+  FROM meal_plan m JOIN recipes r ON r.id = m.recipe_id`;
+// Eingeplant werden können eigene Rezepte und Rezepte aus Gruppen. Wer eine Gruppe verlässt,
+// dessen Rezepte verschwinden wieder aus dem Kalender der anderen.
+const planRow = (row, userId) => {
+  if (!row || !canView(row.owner, userId)) return null;
+  const { owner, ...rest } = row;
+  return rest;
+};
 
 app.get('/api/plan', (req, res) => {
   const { from, to } = req.query;
   if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: 'Ungültiger Zeitraum' });
-  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day BETWEEN ? AND ? ORDER BY m.day`).all(req.user.id, from, to));
+  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day BETWEEN ? AND ? ORDER BY m.day`).all(req.user.id, from, to)
+    .map((row) => planRow(row, req.user.id)).filter(Boolean));
 });
 
 app.put('/api/plan/:day', express.json({ limit: '1kb' }), (req, res) => {
   const { day } = req.params;
   if (!isDay(day)) return res.status(400).json({ error: 'Ungültiges Datum' });
   const recipeId = Number(req.body?.recipe_id);
-  if (!db.prepare('SELECT 1 FROM recipes WHERE id = ? AND user_id = ?').get(recipeId, req.user.id)) {
+  const owner = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(recipeId);
+  if (!owner || !canView(owner.user_id, req.user.id)) {
     return res.status(404).json({ error: 'Rezept nicht gefunden' });
   }
   db.prepare(`INSERT INTO meal_plan (user_id, day, recipe_id) VALUES (?, ?, ?)
               ON CONFLICT (user_id, day) DO UPDATE SET recipe_id = excluded.recipe_id`).run(req.user.id, day, recipeId);
-  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day = ?`).get(req.user.id, day));
+  res.json(planRow(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day = ?`).get(req.user.id, day), req.user.id));
 });
 
 app.delete('/api/plan/:day', (req, res) => {
@@ -867,7 +915,10 @@ app.post('/api/recipes/:id/copy', (req, res) => {
   const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(req.params.id);
   if (!row || !canView(row.user_id, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
   if (row.user_id === req.user.id) return res.status(400).json({ error: 'Das ist schon dein eigenes Rezept' });
-  res.status(201).json({ id: copyRecipe(getRecipe(req.params.id, row.user_id), req.user.id) });
+  const src = getRecipe(req.params.id, row.user_id);
+  const existing = myVersion(src, req.user.id);
+  if (existing) return res.json({ id: existing, existing: true });
+  res.status(201).json({ id: copyRecipe(src, req.user.id) });
 });
 
 function handleSave(req, res) {
