@@ -141,6 +141,9 @@ if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'copi
                AND o.ingredients = recipes.ingredients AND o.id < recipes.id ORDER BY o.id LIMIT 1);`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_copied ON recipes(copied_from)');
+if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'video')) {
+  db.exec('ALTER TABLE recipes ADD COLUMN video TEXT');
+}
 // Rezepte von Gruppenmitgliedern, die ein Benutzer für sich ausgeblendet hat
 db.exec(`
 CREATE TABLE IF NOT EXISTS hidden_recipes (
@@ -516,6 +519,17 @@ function removeFiles(filenames) {
   }
 }
 
+// Nur http(s)-Links als Video übernehmen (kein javascript: o. Ä.), "www.…" ergänzt um https://
+function videoUrl(v) {
+  let s = String(v ?? '').trim().slice(0, 500);
+  if (!s) return '';
+  if (/^www\./i.test(s)) s = 'https://' + s;
+  try {
+    const u = new URL(s);
+    return /^https?:$/.test(u.protocol) ? u.href : '';
+  } catch { return ''; }
+}
+
 function parseRecipeBody(body, userId) {
   // Nur Werte übernehmen, die der Benutzer in der Kategorie angelegt hat (Schreibweise aus der Liste)
   const pick = (field) => {
@@ -537,6 +551,7 @@ function parseRecipeBody(body, userId) {
     pantry: String(body.pantry ?? '').trim(),
     equipment: String(body.equipment ?? '').trim(),
     source: String(body.source ?? '').trim(),
+    video: videoUrl(body.video),
     gang: pick('gang'),
     zeit: pick('zeit'),
     preis: pick('preis'),
@@ -547,7 +562,8 @@ function parseRecipeBody(body, userId) {
 }
 
 const saveRecipe = db.transaction((id, userId, data, newFiles, deletePhotoIds) => {
-  const fields = ['title', 'subtitle', 'description', 'ingredients', 'instructions', 'servings', 'kcal', 'pantry', 'equipment', 'source', 'gang', 'zeit', 'preis', 'aufwand', 'kueche'];
+  const fields = ['title', 'subtitle', 'description', 'ingredients', 'instructions', 'servings', 'kcal', 'pantry', 'equipment', 'source', 'video', 'gang', 'zeit', 'preis', 'aufwand', 'kueche'];
+  data = { video: '', ...data }; // ältere Datensätze (z. B. beim Kopieren) haben evtl. kein Video-Feld
   if (id) {
     db.prepare(`UPDATE recipes SET ${fields.map((f) => `${f} = @${f}`).join(', ')}, updated_at = datetime('now') WHERE id = @id AND user_id = @user_id`)
       .run({ ...data, id, user_id: userId });

@@ -120,7 +120,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 0 16px 4rem; }
 
 .rcard-main { display: flex; height: var(--main-h); border-top: 1px solid var(--line); }
 .rcard-photo { flex: 1; min-width: 0; background: var(--paper-2); overflow: hidden; }
-.rcard-photo img { width: 100%; height: 100%; object-fit: cover; transition: transform .4s; }
+/* Ausschnitt etwas nach unten verschoben: bei Essensfotos liegt der Teller meist im unteren Bildteil */
+.rcard-photo img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 65%; transition: transform .4s; }
 .rcard-ings { flex: none; width: 168px; margin: 0; padding: .8rem .6rem; list-style: none; display: grid; grid-template-columns: 1fr 1fr;
   align-content: start; gap: .7rem .3rem; overflow: hidden; background: var(--paper); }
 .rcard-ings li { display: flex; flex-direction: column; align-items: center; text-align: center; gap: .15rem; min-width: 0; }
@@ -178,6 +179,13 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .rcard-big .rcard-badge { width: 84px; height: 76px; }
 .rcard-big .rcard-badge span { width: 50px; height: 50px; font-size: 1.3rem; }
 .rcard-big .rcard-photo img { cursor: zoom-in; }
+/* Detailansicht: ganzes Foto zeigen, Rand mit verschwommener Version desselben Fotos füllen */
+.rcard-big .rcard-photo { position: relative; }
+.rcard-big .rcard-photo::before { content: ''; position: absolute; inset: -24px; background: var(--ph) center / cover no-repeat;
+  filter: blur(20px) brightness(.92); }
+.rcard-big .rcard-photo img { position: relative; object-fit: contain; }
+.video-row { margin: 0 0 1.2rem; }
+.video-row .btn small { font-weight: 600; }
 .rcard-big .rcard-ings { width: 220px; padding: 1.1rem .8rem; }
 .rcard-big .ing-ic { width: 44px; height: 44px; font-size: 1.4rem; }
 .rcard-big .ing-lbl { font-size: .72rem; white-space: normal; }

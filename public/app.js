@@ -247,7 +247,7 @@ function recipeCard(r, { link = true, big = false } = {}) {
       </div>
     </div>
     <div class="rcard-main">
-      <div class="rcard-photo">${photo ? `<img loading="lazy" src="${photoUrl(photo)}" alt="">` : placeholder(r.id)}</div>
+      <div class="rcard-photo"${big && photo ? ` style="--ph:url('${photoUrl(photo)}')"` : ''}>${photo ? `<img loading="lazy" src="${photoUrl(photo)}" alt="">` : placeholder(r.id)}</div>
       ${ingList ? `<ul class="rcard-ings">${ingList}</ul>` : ''}
     </div>
   </${tag}>`;
@@ -667,6 +667,9 @@ async function renderDetail(id, { shared = false } = {}) {
 
     ${info.length ? `<div class="infobar">${info.map(([ic, l, v]) => `<div class="info"><span class="info-ic">${ic}</span><div><small>${l}</small><strong>${esc(v)}</strong></div></div>`).join('')}</div>` : ''}
     ${r.description ? `<p class="desc">${esc(r.description).replace(/\n/g, '<br>')}</p>` : ''}
+    ${/^https?:\/\//i.test(r.video || '') ? `<p class="video-row"><a class="btn btn-outline" href="${esc(r.video)}" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/></svg> Video ansehen
+      <small class="muted">${esc(r.video.replace(/^https?:\/\/(www\.|m\.)?/i, '').split('/')[0])}</small></a></p>` : ''}
 
     <div class="sheet">
       <aside class="sheet-side">
@@ -1369,6 +1372,10 @@ async function renderForm(id) {
         <label for="f-src">Quelle</label>
         <input id="f-src" name="source" value="${esc(r.source)}" placeholder="Link oder z. B. „Omas Kochbuch“">
       </div>
+      <div class="field">
+        <label for="f-video">Video-Link</label>
+        <input id="f-video" name="video" type="url" inputmode="url" value="${esc(r.video)}" placeholder="z. B. https://www.youtube.com/watch?v=…">
+      </div>
     </fieldset>
 
     <div class="form-actions">
@@ -1464,7 +1471,7 @@ async function renderForm(id) {
     btn.textContent = newFiles.length ? 'Fotos werden hochgeladen…' : 'Speichern…';
     try {
       const fd = new FormData();
-      for (const name of ['title', 'subtitle', 'description', 'gang', 'zeit', 'aufwand', 'preis', 'kueche', 'servings', 'kcal', 'tags', 'ingredients', 'instructions', 'pantry', 'equipment', 'source']) {
+      for (const name of ['title', 'subtitle', 'description', 'gang', 'zeit', 'aufwand', 'preis', 'kueche', 'servings', 'kcal', 'tags', 'ingredients', 'instructions', 'pantry', 'equipment', 'source', 'video']) {
         fd.append(name, form.elements[name].value);
       }
       fd.append('deletePhotos', [...deletePhotos].join(','));
