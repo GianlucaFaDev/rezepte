@@ -261,11 +261,12 @@ async function route() {
     if (shareToken) { showUser(); return await renderDetail(null, { shared: true }); }
     if (!auth.user) return renderLogin();
     showUser();
-    if (!meta) { meta = await api('/api/meta'); pruneFilters(); }
+    if (!meta) { meta = await api('/api/meta'); pruneFilters(); showStorage(); }
     // Nach dem Login: vorgemerktes geteiltes Rezept übernehmen
     const pending = ssTake('import');
     if (pending) return await importShared(pending);
     if (view === 'kategorien') renderCategories();
+    else if (view === 'benutzer') await renderUsers();
     else if (view === 'kalender') await renderCalendar(id);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
@@ -299,6 +300,29 @@ $('#btn-random').addEventListener('click', () => goRandom(false));
 function showUser() {
   $('#nav').hidden = !auth?.user;
   $('#user-name').textContent = auth?.user ? auth.user.username : '';
+  const admin = !!auth?.user?.isAdmin;
+  $('#menu-users').hidden = !admin;
+  const n = admin ? auth.pending || 0 : 0;
+  $('#menu-users-badge').textContent = n;
+  $('#menu-users-badge').hidden = !n;
+  $('#user-badge').hidden = !n;
+}
+
+const fmtMB = (bytes) => {
+  const mb = bytes / 1048576;
+  return mb >= 1000 ? `${(mb / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 })} GB`
+    : `${mb.toLocaleString('de-DE', { maximumFractionDigits: mb < 10 ? 1 : 0 })} MB`;
+};
+
+// Speicherverbrauch im Benutzermenü
+function showStorage() {
+  const el = $('#menu-storage');
+  const s = meta?.storage;
+  el.hidden = !s;
+  if (!s) return;
+  const pct = s.quota ? Math.min(100, (s.used / s.quota) * 100) : 0;
+  el.innerHTML = `<div class="storage-txt">Fotos: ${fmtMB(s.used)}${s.quota ? ` von ${fmtMB(s.quota)}` : ''}</div>
+    ${s.quota ? `<div class="storage-bar${pct >= 90 ? ' full' : ''}"><span style="width:${pct.toFixed(1)}%"></span></div>` : ''}`;
 }
 
 function resetState() {
@@ -307,7 +331,7 @@ function resetState() {
   Object.assign(state, { q: '', ids: [], random: false, listScroll: 0 });
 }
 
-function renderLogin(mode = 'login') {
+function renderLogin(mode = 'login', notice = '') {
   if (cleanup) { cleanup(); cleanup = null; }
   showUser();
   const reg = mode === 'register';
@@ -317,7 +341,8 @@ function renderLogin(mode = 'login') {
     <div class="auth-ic">🥕</div>
     <h1>${reg ? 'Konto anlegen' : 'Anmelden'}</h1>
     <p class="muted">${ssGet('import') ? 'Melde dich an oder registriere dich, dann wird das geteilte Rezept in dein Kochbuch übernommen.'
-      : reg ? 'Leg ein Konto für deine eigene Rezeptsammlung an.' : 'Melde dich an, um deine Rezepte zu sehen.'}</p>
+      : reg ? 'Leg ein Konto für deine eigene Rezeptsammlung an. Neue Konten werden erst nach Bestätigung freigeschaltet.' : 'Melde dich an, um deine Rezepte zu sehen.'}</p>
+    ${notice ? `<p class="auth-notice">${esc(notice)}</p>` : ''}
     <div class="field">
       <label for="a-user">Benutzername</label>
       <input id="a-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
@@ -353,7 +378,9 @@ function renderLogin(mode = 'login') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: f.username.value.trim(), password: f.password.value }),
       });
-      auth = { ...auth, user: res.user };
+      if (res.pending) return renderLogin('login', 'Danke! Dein Konto wird freigeschaltet, sobald es bestätigt wurde. Danach kannst du dich hier anmelden.');
+      auth = { ...auth, user: res.user, pending: 0 };
+      if (res.user.isAdmin) api('/api/auth/me').then((me) => { auth = me; showUser(); }).catch(() => {});
       resetState();
       if (location.hash && location.hash !== '#/') route();
       else { location.hash = '#/'; route(); }
@@ -949,9 +976,67 @@ function renderCategories() {
   });
 }
 
+// ================= Benutzerverwaltung (Admin) =================
+async function renderUsers() {
+  if (!auth.user.isAdmin) { location.hash = '#/'; return; }
+  const users = await api('/api/admin/users');
+  auth.pending = users.filter((u) => !u.approved).length;
+  showUser();
+  window.scrollTo(0, 0);
+  const date = (s) => new Date(s.replace(' ', 'T') + 'Z').toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const pending = users.filter((u) => !u.approved);
+  const active = users.filter((u) => u.approved);
+  const row = (u, actions) => `
+    <li class="user-row" data-id="${u.id}" data-name="${esc(u.username)}">
+      <div class="user-info"><strong>${esc(u.username)}</strong>${u.is_admin ? ' <span class="user-tag">Admin</span>' : ''}
+        <small class="muted">${u.approved
+          ? `${u.recipes} Rezept(e) · ${fmtMB(u.storage)}${u.quota ? ` von ${fmtMB(u.quota)}` : ''} · seit ${date(u.created_at)}`
+          : `angefragt am ${date(u.created_at)}`}</small></div>
+      <div class="user-actions">${actions}</div>
+    </li>`;
+  app.innerHTML = `
+  <div class="form">
+    <div class="form-head">
+      <a href="#/" class="back">${ICON.left} Zurück</a>
+      <h1>Benutzer</h1>
+      <p class="muted">Neue Registrierungen müssen hier freigeschaltet werden, bevor sich jemand anmelden kann.</p>
+    </div>
+    <fieldset class="panel">
+      <legend>Offene Anfragen</legend>
+      ${pending.length ? `<ul class="user-list">${pending.map((u) => row(u, `
+        <button type="button" class="btn btn-primary" data-act="approve">Freischalten</button>
+        <button type="button" class="btn btn-ghost-danger" data-act="reject">Ablehnen</button>`)).join('')}</ul>`
+        : '<p class="muted user-empty">Keine offenen Anfragen.</p>'}
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Konten</legend>
+      <ul class="user-list">${active.map((u) => row(u, u.is_admin ? ''
+        : '<button type="button" class="btn btn-ghost-danger" data-act="delete">Löschen</button>')).join('')}</ul>
+    </fieldset>
+  </div>`;
+
+  app.querySelector('.form').addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn) return;
+    const li = btn.closest('.user-row');
+    const { id, name } = li.dataset;
+    const act = btn.dataset.act;
+    if (act === 'reject' && !confirm(`Anfrage von „${name}“ ablehnen?`)) return;
+    if (act === 'delete' && !confirm(`Konto „${name}“ mit allen Rezepten und Fotos endgültig löschen?`)) return;
+    btn.disabled = true;
+    try {
+      if (act === 'approve') await api(`/api/admin/users/${id}/approve`, { method: 'POST' });
+      else await api(`/api/admin/users/${id}`, { method: 'DELETE' });
+      toast(act === 'approve' ? `„${name}“ freigeschaltet` : act === 'reject' ? 'Anfrage abgelehnt' : 'Konto gelöscht');
+      await renderUsers();
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+}
+
 async function reloadMeta() {
   meta = await api('/api/meta');
   pruneFilters();
+  showStorage();
   state.ids = [];
 }
 

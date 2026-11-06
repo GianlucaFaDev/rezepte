@@ -52,6 +52,7 @@ WantedBy=multi-user.target
 | `PORT`         | `3000`    | Port                                           |
 | `DATA_DIR`     | `./data`  | Ordner für Datenbank und Fotos                 |
 | `ALLOW_REGISTRATION` | `true` | `false`: keine neuen Konten mehr anlegbar  |
+| `USER_QUOTA_MB` | `500`    | Speicherlimit für Fotos pro Benutzer in MB (`0` = unbegrenzt) |
 | `TRUST_PROXY`  | –         | Hinter einem Reverse-Proxy setzen, z. B. `1` (siehe unten) |
 
 ## Benutzer
@@ -59,7 +60,11 @@ WantedBy=multi-user.target
 Beim ersten Aufruf erscheint die Login-Seite, dort über „Registrieren“ ein Konto anlegen.
 Jeder Benutzer sieht nur seine eigenen Rezepte und Fotos. Rezepte aus der Zeit vor dem Login
 werden automatisch dem ersten registrierten Benutzer zugeordnet.
-Wenn alle Konten angelegt sind: `ALLOW_REGISTRATION=false` setzen.
+
+**Freischaltung:** Das erste Konto wird Admin. Alle weiteren Registrierungen müssen vom Admin
+freigeschaltet werden (Benutzermenü → „Benutzer“), vorher ist keine Anmeldung möglich. Dort lassen
+sich Anfragen auch ablehnen und Konten löschen. Höchstens 20 Anfragen können gleichzeitig offen sein.
+Wer gar keine neuen Konten möchte: `ALLOW_REGISTRATION=false` setzen.
 
 ## Von außen erreichbar machen
 

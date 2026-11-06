@@ -99,6 +99,23 @@ CREATE TABLE IF NOT EXISTS meal_plan (
   recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, day)
 );`);
+// Migration: Freischaltung neuer Konten durch einen Admin.
+// Bestehende Konten gelten als freigeschaltet, der älteste Benutzer wird Admin.
+if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'approved')) {
+  db.exec(`ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 1;
+           ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0;
+           UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users);`);
+}
+// Migration: Dateigröße der Fotos merken (für das Speicherlimit pro Benutzer)
+if (!db.prepare('PRAGMA table_info(photos)').all().some((c) => c.name === 'size')) {
+  db.exec('ALTER TABLE photos ADD COLUMN size INTEGER NOT NULL DEFAULT 0');
+}
+{
+  const setSize = db.prepare('UPDATE photos SET size = ? WHERE id = ?');
+  for (const p of db.prepare('SELECT id, filename FROM photos WHERE size = 0').all()) {
+    try { setSize.run(fs.statSync(path.join(UPLOAD_DIR, path.basename(p.filename))).size, p.id); } catch {}
+  }
+}
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -195,14 +212,21 @@ app.use((req, res, next) => {
   req.user = null;
   const token = readCookie(req, COOKIE);
   if (token) {
-    req.user = db.prepare(`SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id
-                           WHERE s.token_hash = ? AND s.expires_at > ?`).get(tokenHash(token), Date.now()) || null;
+    const row = db.prepare(`SELECT u.id, u.username, u.is_admin FROM sessions s JOIN users u ON u.id = s.user_id
+                            WHERE s.token_hash = ? AND s.expires_at > ? AND u.approved = 1`).get(tokenHash(token), Date.now());
+    if (row) req.user = { id: row.id, username: row.username, isAdmin: !!row.is_admin };
   }
   next();
 });
 
 const requireAuth = (req, res, next) =>
   req.user ? next() : res.status(401).json({ error: 'Bitte einloggen' });
+const requireAdmin = (req, res, next) =>
+  !req.user ? res.status(401).json({ error: 'Bitte einloggen' })
+    : req.user.isAdmin ? next() : res.status(403).json({ error: 'Nur für Admins' });
+
+// Höchstzahl offener Anfragen, damit Bots die Datenbank nicht mit Anfragen füllen
+const MAX_PENDING = 20;
 
 // Einfacher Schutz gegen Passwort-Raten: max. 10 Fehlversuche pro IP in 15 Min.
 function tooManyAttempts(ip) {
@@ -220,7 +244,8 @@ const authRouter = express.Router();
 authRouter.use(express.json({ limit: '10kb' }));
 
 authRouter.get('/me', (req, res) => {
-  res.json({ user: req.user, allowRegistration: ALLOW_REGISTRATION });
+  const pending = req.user?.isAdmin ? db.prepare('SELECT COUNT(*) AS n FROM users WHERE approved = 0').get().n : 0;
+  res.json({ user: req.user, allowRegistration: ALLOW_REGISTRATION, pending });
 });
 
 authRouter.post('/register', (req, res) => {
@@ -236,15 +261,21 @@ authRouter.post('/register', (req, res) => {
   if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) {
     return res.status(409).json({ error: 'Benutzername ist schon vergeben' });
   }
-  const userId = db.transaction(() => {
-    const id = db.prepare('INSERT INTO users (username, pass_hash) VALUES (?, ?)').run(username, hashPassword(password)).lastInsertRowid;
-    // Rezepte aus der Zeit vor dem Login gehören dem ersten Benutzer
-    db.prepare('UPDATE recipes SET user_id = ? WHERE user_id IS NULL').run(id);
+  const passHash = hashPassword(password);
+  const result = db.transaction(() => {
+    // Der erste Benutzer wird Admin und ist sofort freigeschaltet, alle weiteren warten auf Freischaltung
+    const first = !db.prepare('SELECT 1 FROM users LIMIT 1').get();
+    if (!first && db.prepare('SELECT COUNT(*) AS n FROM users WHERE approved = 0').get().n >= MAX_PENDING) return null;
+    const id = db.prepare('INSERT INTO users (username, pass_hash, approved, is_admin) VALUES (?, ?, ?, ?)')
+      .run(username, passHash, first ? 1 : 0, first ? 1 : 0).lastInsertRowid;
+    if (first) db.prepare('UPDATE recipes SET user_id = ? WHERE user_id IS NULL').run(id); // Rezepte aus der Zeit vor dem Login
     seedOptions(id);
-    return id;
+    return { id, first };
   })();
-  createSession(req, res, userId);
-  res.status(201).json({ user: { id: userId, username } });
+  if (!result) return res.status(429).json({ error: 'Gerade sind zu viele Anfragen offen, bitte später erneut versuchen' });
+  if (!result.first) return res.status(202).json({ pending: true });
+  createSession(req, res, result.id);
+  res.status(201).json({ user: { id: result.id, username, isAdmin: true } });
 });
 
 authRouter.post('/login', (req, res) => {
@@ -252,15 +283,16 @@ authRouter.post('/login', (req, res) => {
   if (tooManyAttempts(ip)) return res.status(429).json({ error: 'Zu viele Fehlversuche, bitte in 15 Minuten erneut versuchen' });
   const username = String(req.body?.username ?? '').trim();
   const password = String(req.body?.password ?? '');
-  const user = db.prepare('SELECT id, username, pass_hash FROM users WHERE username = ?').get(username);
+  const user = db.prepare('SELECT id, username, pass_hash, approved, is_admin FROM users WHERE username = ?').get(username);
   const ok = verifyPassword(password, user ? user.pass_hash : DUMMY_HASH) && !!user;
   if (!ok) {
     noteFailure(ip);
     return res.status(401).json({ error: 'Benutzername oder Passwort falsch' });
   }
   failedLogins.delete(ip);
+  if (!user.approved) return res.status(403).json({ error: 'Dein Konto wartet noch auf Freischaltung' });
   createSession(req, res, user.id);
-  res.json({ user: { id: user.id, username: user.username } });
+  res.json({ user: { id: user.id, username: user.username, isAdmin: !!user.is_admin } });
 });
 
 authRouter.post('/logout', (req, res) => {
@@ -271,6 +303,33 @@ authRouter.post('/logout', (req, res) => {
 });
 
 app.use('/api/auth', authRouter);
+
+// ---------- Benutzerverwaltung (nur Admins) ----------
+app.get('/api/admin/users', requireAdmin, (req, res) => {
+  res.json(db.prepare(`SELECT u.id, u.username, u.created_at, u.approved, u.is_admin,
+                              (SELECT COUNT(*) FROM recipes r WHERE r.user_id = u.id) AS recipes,
+                              (SELECT COALESCE(SUM(p.size), 0) FROM photos p JOIN recipes r ON r.id = p.recipe_id
+                               WHERE r.user_id = u.id) AS storage
+                       FROM users u ORDER BY u.approved, u.created_at DESC`).all()
+    .map((u) => ({ ...u, approved: !!u.approved, is_admin: !!u.is_admin, quota: USER_QUOTA })));
+});
+
+app.post('/api/admin/users/:id/approve', requireAdmin, (req, res) => {
+  const info = db.prepare('UPDATE users SET approved = 1 WHERE id = ? AND approved = 0').run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: 'Anfrage nicht gefunden' });
+  res.status(204).end();
+});
+
+// Ablehnen (offene Anfrage) bzw. Konto löschen, samt Rezepten und Fotos
+app.delete('/api/admin/users/:id', requireAdmin, (req, res) => {
+  const target = db.prepare('SELECT id, is_admin FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return res.status(404).json({ error: 'Benutzer nicht gefunden' });
+  if (target.is_admin) return res.status(400).json({ error: 'Admin-Konten können nicht gelöscht werden' });
+  const photos = db.prepare('SELECT p.filename FROM photos p JOIN recipes r ON r.id = p.recipe_id WHERE r.user_id = ?').all(target.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(target.id); // Rezepte, Sessions usw. per ON DELETE CASCADE
+  removeFiles(photos.map((p) => p.filename));
+  res.status(204).end();
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -343,6 +402,16 @@ function getRecipe(id, userId) {
   return recipe;
 }
 
+// Speicherlimit für Fotos pro Benutzer (USER_QUOTA_MB, 0 = unbegrenzt)
+const USER_QUOTA = Math.max(0, Number(process.env.USER_QUOTA_MB ?? 500) || 0) * 1024 * 1024;
+const storageUsed = (userId) =>
+  db.prepare('SELECT COALESCE(SUM(p.size), 0) AS n FROM photos p JOIN recipes r ON r.id = p.recipe_id WHERE r.user_id = ?').get(userId).n;
+const storageInfo = (userId) => ({ used: storageUsed(userId), quota: USER_QUOTA });
+
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
 function removeFiles(filenames) {
   for (const f of filenames) {
     fs.unlink(path.join(UPLOAD_DIR, path.basename(f)), () => {});
@@ -402,9 +471,17 @@ const saveRecipe = db.transaction((id, userId, data, newFiles, deletePhotoIds) =
     }
   }
 
+  // Speicherlimit nur beim Hinzufügen prüfen (Bearbeiten und Löschen geht immer). Läuft in der
+  // Transaktion, ein Fehler macht also alle Änderungen dieses Speicherns rückgängig.
+  const added = newFiles.reduce((s, f) => s + (f.size || 0), 0);
+  if (USER_QUOTA && added && storageUsed(userId) + added > USER_QUOTA) {
+    const mb = (n) => Math.round(n / 1048576);
+    throw new HttpError(413, `Speicherplatz voll: ${mb(storageUsed(userId))} von ${mb(USER_QUOTA)} MB belegt, die neuen Fotos haben ${Math.max(1, mb(added))} MB. Bitte zuerst Fotos löschen.`);
+  }
+
   let pos = db.prepare('SELECT COALESCE(MAX(position), -1) AS m FROM photos WHERE recipe_id = ?').get(id).m;
-  const insPhoto = db.prepare('INSERT INTO photos (recipe_id, filename, position) VALUES (?, ?, ?)');
-  for (const f of newFiles) insPhoto.run(id, f.filename, ++pos);
+  const insPhoto = db.prepare('INSERT INTO photos (recipe_id, filename, position, size) VALUES (?, ?, ?, ?)');
+  for (const f of newFiles) insPhoto.run(id, f.filename, ++pos, f.size || 0);
 
   return { id, removed };
 });
@@ -446,7 +523,7 @@ app.post('/api/public/:token/import', requireAuth, (req, res) => {
     for (const p of src.photos) {
       const filename = crypto.randomBytes(12).toString('hex') + path.extname(p.filename);
       fs.copyFileSync(path.join(UPLOAD_DIR, path.basename(p.filename)), path.join(UPLOAD_DIR, filename));
-      copied.push({ filename });
+      copied.push({ filename, size: fs.statSync(path.join(UPLOAD_DIR, filename)).size });
     }
     const id = db.transaction(() => {
       const data = { ...src, tags: src.tags };
@@ -496,6 +573,7 @@ app.get('/api/meta', (req, res) => {
     tags: db.prepare(`SELECT t.tag AS name, COUNT(*) AS n FROM recipe_tags t JOIN recipes r ON r.id = t.recipe_id
                       WHERE r.user_id = ? GROUP BY t.tag ORDER BY t.tag`).all(uid),
     total: db.prepare('SELECT COUNT(*) AS n FROM recipes WHERE user_id = ?').get(uid).n,
+    storage: storageInfo(uid),
   });
 });
 
@@ -662,6 +740,7 @@ app.use((err, req, res, next) => {
     const msg = err.code === 'LIMIT_FILE_SIZE' ? 'Foto ist zu groß (max. 15 MB)' : err.message;
     return res.status(400).json({ error: msg });
   }
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   console.error(err);
   res.status(500).json({ error: 'Interner Fehler' });
 });

@@ -361,7 +361,29 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
   color: var(--ink); text-decoration: none; font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
 .menu-item:hover { background: var(--paper-2); }
 .menu-item .ic { color: var(--muted); }
+.menu-item[hidden], .user-badge[hidden], .count-badge[hidden] { display: none; }
+.count-badge { margin-left: auto; min-width: 1.4rem; padding: 0 .4rem; border-radius: 999px; background: var(--danger); color: #fff;
+  font-size: .75rem; font-weight: 800; line-height: 1.4rem; text-align: center; }
+.user-btn { position: relative; }
+.user-badge { position: absolute; top: .3rem; left: 1.5rem; width: .55rem; height: .55rem; border-radius: 50%; background: var(--danger); }
+.menu-storage { margin: .3rem 0; padding: .55rem .75rem .65rem; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.menu-storage[hidden] { display: none; }
+.storage-txt { font-size: .8rem; color: var(--muted); font-weight: 600; margin-bottom: .35rem; }
+.storage-bar { height: 6px; border-radius: 999px; background: var(--paper-2); overflow: hidden; }
+.storage-bar span { display: block; height: 100%; background: var(--green); border-radius: inherit; }
+.storage-bar.full span { background: var(--danger); }
 #btn-logout { color: var(--danger); }
+
+/* ---------- Benutzerverwaltung ---------- */
+.auth-notice { background: var(--green-soft); color: var(--green-strong); border-radius: 8px; padding: .7rem .9rem; font-weight: 600; margin: 0 0 1.2rem; }
+.user-list { clear: both; list-style: none; margin: 0; padding: 0; }
+.user-row { display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; padding: .7rem 0; border-top: 1px solid var(--line); }
+.user-row:first-child { border-top: 0; padding-top: 0; }
+.user-info { display: flex; flex-direction: column; min-width: 0; }
+.user-info strong { overflow-wrap: anywhere; }
+.user-tag { display: inline-block; font-size: .7rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--green); }
+.user-actions { display: flex; gap: .4rem; }
+.user-empty { clear: both; margin: 0; }
 #btn-logout .ic { color: var(--danger); }
 
 /* ---------- Kalender ---------- */
