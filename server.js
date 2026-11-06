@@ -141,6 +141,13 @@ if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'copi
                AND o.ingredients = recipes.ingredients AND o.id < recipes.id ORDER BY o.id LIMIT 1);`);
 }
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_copied ON recipes(copied_from)');
+// Rezepte von Gruppenmitgliedern, die ein Benutzer für sich ausgeblendet hat
+db.exec(`
+CREATE TABLE IF NOT EXISTS hidden_recipes (
+  user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  PRIMARY KEY (user_id, recipe_id)
+);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -432,6 +439,9 @@ function buildFilter(q, userId) {
       NOT (r.copied_from IS NOT NULL AND EXISTS (SELECT 1 FROM recipes o WHERE o.id = r.copied_from AND o.user_id IN (${inIds})))
       AND NOT EXISTS (SELECT 1 FROM recipes c WHERE c.user_id = ? AND (c.id = r.copied_from OR c.copied_from = COALESCE(r.copied_from, r.id)))))`);
     params.push(userId, ...ids, userId);
+    // Selbst ausgeblendete Rezepte weglassen
+    where.push('NOT EXISTS (SELECT 1 FROM hidden_recipes h WHERE h.user_id = ? AND h.recipe_id = r.id)');
+    params.push(userId);
   }
   for (const field of ['gang', 'zeit', 'preis', 'aufwand', 'kueche']) {
     const vals = toList(q[field]);
@@ -475,6 +485,7 @@ function getViewable(id, userId) {
   if (!recipe.own) {
     delete recipe.share_token; // Freigabe-Link gehört dem Besitzer
     recipe.myVersion = myVersion(recipe, userId);
+    recipe.hidden = !!db.prepare('SELECT 1 FROM hidden_recipes WHERE user_id = ? AND recipe_id = ?').get(userId, id);
   }
   delete recipe.user_id;
   delete recipe.copied_from;
@@ -908,6 +919,26 @@ app.get('/api/recipes/:id', (req, res) => {
   const recipe = getViewable(req.params.id, req.user.id);
   if (!recipe) return res.status(404).json({ error: 'Rezept nicht gefunden' });
   res.json(recipe);
+});
+
+// Rezept eines Gruppenmitglieds für sich aus- bzw. wieder einblenden
+app.post('/api/recipes/:id/hide', (req, res) => {
+  const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(req.params.id);
+  if (!row || !canView(row.user_id, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  if (row.user_id === req.user.id) return res.status(400).json({ error: 'Eigene Rezepte kannst du löschen statt ausblenden' });
+  db.prepare('INSERT OR IGNORE INTO hidden_recipes (user_id, recipe_id) VALUES (?, ?)').run(req.user.id, req.params.id);
+  res.status(204).end();
+});
+app.delete('/api/recipes/:id/hide', (req, res) => {
+  db.prepare('DELETE FROM hidden_recipes WHERE user_id = ? AND recipe_id = ?').run(req.user.id, req.params.id);
+  res.status(204).end();
+});
+// Liste der ausgeblendeten Rezepte (nur die, die man noch sehen dürfte)
+app.get('/api/hidden', (req, res) => {
+  const rows = db.prepare(`SELECT r.id, r.title, r.user_id, u.username AS author FROM hidden_recipes h
+                           JOIN recipes r ON r.id = h.recipe_id JOIN users u ON u.id = r.user_id
+                           WHERE h.user_id = ? ORDER BY r.title COLLATE NOCASE`).all(req.user.id);
+  res.json(rows.filter((r) => canView(r.user_id, req.user.id)).map(({ user_id, ...r }) => r));
 });
 
 // Rezept eines Gruppenmitglieds ins eigene Kochbuch kopieren

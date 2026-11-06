@@ -71,7 +71,9 @@ einladen. Erst wenn die Einladung angenommen ist, sehen sich die Mitglieder gege
 (nur lesen; „In mein Kochbuch kopieren“ legt eine eigene Kopie an). In der Übersicht schaltet man
 zwischen „Meine Rezepte“ und den Gruppen um. Hat man ein Rezept kopiert, zeigt die Gruppe nur noch die
 eigene Kopie statt des Originals an (keine Doppelten). Gruppenrezepte können auch im Kalender eingeplant
-werden; Kalender und Kategorien selbst bleiben privat.
+werden; Kalender und Kategorien selbst bleiben privat. Rezepte anderer lassen sich für sich selbst
+**ausblenden** (Detailansicht → „Ausblenden“): Sie verschwinden dann aus Gruppenansicht, Zufall und
+Kalenderauswahl, die anderen behalten sie. Wieder einblenden unter „Gruppen“.
 ## Von außen erreichbar machen
 
 Hinter einem Reverse-Proxy (Caddy, nginx, Traefik) **`TRUST_PROXY` setzen**, sonst sieht die App

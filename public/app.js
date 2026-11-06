@@ -630,6 +630,7 @@ async function renderDetail(id, { shared = false } = {}) {
   <article class="detail">
     <div class="detail-nav">
       ${shared ? '<span class="shared-note">Geteiltes Rezept</span>' : `<a href="#/" class="back">${ICON.left} Alle Rezepte</a>`}
+      ${r.hidden ? '<span class="shared-note">Für dich ausgeblendet</span>' : ''}
       ${idx >= 0 ? `<span class="pos">${idx + 1} / ${state.ids.length}</span>` : ''}
     </div>
 
@@ -650,6 +651,9 @@ async function renderDetail(id, { shared = false } = {}) {
         ${r.myVersion
           ? `<a class="btn btn-outline" href="#/r/${r.myVersion}">Meine Version öffnen</a>`
           : '<button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>'}
+        ${r.hidden
+          ? '<button class="btn btn-outline" id="unhide">Wieder einblenden</button>'
+          : '<button class="btn btn-ghost-danger" id="hide" title="Für dich ausblenden, die Gruppe behält das Rezept">Ausblenden</button>'}
       </div>` : `<div class="actions">
         ${state.random ? `<button class="btn btn-outline" id="reroll">🎲 Nochmal würfeln</button>` : ''}
         <button class="btn btn-outline" id="share">${ICON.share} Teilen</button>
@@ -723,6 +727,25 @@ async function renderDetail(id, { shared = false } = {}) {
   }));
 
   $('#reroll')?.addEventListener('click', () => goRandom(state.randomFiltered));
+  $('#hide')?.addEventListener('click', async () => {
+    if (!confirm(`„${r.title}“ für dich ausblenden? Es verschwindet aus der Gruppenansicht, aus „Zufall“ und aus der Kalenderauswahl. ${r.author} und die anderen behalten es. Wieder einblenden kannst du es unter „Gruppen“.`)) return;
+    try {
+      await api(`/api/recipes/${r.id}/hide`, { method: 'POST' });
+      meta = null;
+      state.ids = state.ids.filter((x) => x !== r.id);
+      toast('Ausgeblendet');
+      location.hash = '#/';
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#unhide')?.addEventListener('click', async () => {
+    try {
+      await api(`/api/recipes/${r.id}/hide`, { method: 'DELETE' });
+      meta = null;
+      state.ids = [];
+      toast('Wieder eingeblendet');
+      route();
+    } catch (err) { toast(err.message, true); }
+  });
   $('#copy')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
@@ -1077,7 +1100,7 @@ async function renderUsers() {
 
 // ================= Gruppen =================
 async function renderGroups() {
-  const { groups, invites } = await api('/api/groups');
+  const [{ groups, invites }, hidden] = await Promise.all([api('/api/groups'), api('/api/hidden')]);
   if (meta) { meta.invites = invites.length; showUser(); }
   window.scrollTo(0, 0);
   const me = auth.user.id;
@@ -1123,6 +1146,14 @@ async function renderGroups() {
           : '<div class="group-links"><button type="button" class="link-btn share-off" data-act="leave">Gruppe verlassen</button></div>'}
       </div>
     </fieldset>`).join('')}
+    ${hidden.length ? `<fieldset class="panel">
+      <legend>Für dich ausgeblendete Rezepte</legend>
+      <ul class="user-list">${hidden.map((h) => `
+        <li class="user-row" data-rid="${h.id}">
+          <div class="user-info"><a href="#/r/${h.id}"><strong>${esc(h.title)}</strong></a><small class="muted">von ${esc(h.author)}</small></div>
+          <div class="user-actions"><button type="button" class="btn btn-outline" data-unhide="${h.id}">Einblenden</button></div>
+        </li>`).join('')}</ul>
+    </fieldset>` : ''}
     <fieldset class="panel">
       <legend>Neue Gruppe</legend>
       <form class="group-invite" data-act="create">
@@ -1159,6 +1190,14 @@ async function renderGroups() {
   });
 
   root.addEventListener('click', async (e) => {
+    const unhide = e.target.closest('button[data-unhide]');
+    if (unhide) {
+      try {
+        await api(`/api/recipes/${unhide.dataset.unhide}/hide`, { method: 'DELETE' });
+        await done('Wieder eingeblendet');
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
     const act = btn.dataset.act;
