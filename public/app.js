@@ -271,6 +271,7 @@ async function route() {
     if (view === 'kategorien') renderCategories();
     else if (view === 'benutzer') await renderUsers();
     else if (view === 'gruppen') await renderGroups();
+    else if (view === 'ausgeblendet') await renderHidden();
     else if (view === 'kalender') await renderCalendar(id);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
@@ -728,7 +729,7 @@ async function renderDetail(id, { shared = false } = {}) {
 
   $('#reroll')?.addEventListener('click', () => goRandom(state.randomFiltered));
   $('#hide')?.addEventListener('click', async () => {
-    if (!confirm(`„${r.title}“ für dich ausblenden? Es verschwindet aus der Gruppenansicht, aus „Zufall“ und aus der Kalenderauswahl. ${r.author} und die anderen behalten es. Wieder einblenden kannst du es unter „Gruppen“.`)) return;
+    if (!confirm(`„${r.title}“ für dich ausblenden? Es verschwindet aus der Gruppenansicht, aus „Zufall“ und aus der Kalenderauswahl. ${r.author} und die anderen behalten es. Wieder einblenden kannst du es im Benutzermenü unter „Ausgeblendete Rezepte“.`)) return;
     try {
       await api(`/api/recipes/${r.id}/hide`, { method: 'POST' });
       meta = null;
@@ -1100,7 +1101,7 @@ async function renderUsers() {
 
 // ================= Gruppen =================
 async function renderGroups() {
-  const [{ groups, invites }, hidden] = await Promise.all([api('/api/groups'), api('/api/hidden')]);
+  const { groups, invites } = await api('/api/groups');
   if (meta) { meta.invites = invites.length; showUser(); }
   window.scrollTo(0, 0);
   const me = auth.user.id;
@@ -1146,14 +1147,6 @@ async function renderGroups() {
           : '<div class="group-links"><button type="button" class="link-btn share-off" data-act="leave">Gruppe verlassen</button></div>'}
       </div>
     </fieldset>`).join('')}
-    ${hidden.length ? `<fieldset class="panel">
-      <legend>Für dich ausgeblendete Rezepte</legend>
-      <ul class="user-list">${hidden.map((h) => `
-        <li class="user-row" data-rid="${h.id}">
-          <div class="user-info"><a href="#/r/${h.id}"><strong>${esc(h.title)}</strong></a><small class="muted">von ${esc(h.author)}</small></div>
-          <div class="user-actions"><button type="button" class="btn btn-outline" data-unhide="${h.id}">Einblenden</button></div>
-        </li>`).join('')}</ul>
-    </fieldset>` : ''}
     <fieldset class="panel">
       <legend>Neue Gruppe</legend>
       <form class="group-invite" data-act="create">
@@ -1190,14 +1183,6 @@ async function renderGroups() {
   });
 
   root.addEventListener('click', async (e) => {
-    const unhide = e.target.closest('button[data-unhide]');
-    if (unhide) {
-      try {
-        await api(`/api/recipes/${unhide.dataset.unhide}/hide`, { method: 'DELETE' });
-        await done('Wieder eingeblendet');
-      } catch (err) { toast(err.message, true); }
-      return;
-    }
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
     const act = btn.dataset.act;
@@ -1228,6 +1213,43 @@ async function renderGroups() {
         await done('Gruppe gelöscht');
       }
     } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ================= Ausgeblendete Rezepte =================
+async function renderHidden() {
+  const hidden = await api('/api/hidden');
+  window.scrollTo(0, 0);
+  app.innerHTML = `
+  <div class="form">
+    <div class="form-head">
+      <a href="#/" class="back">${ICON.left} Zurück</a>
+      <h1>Ausgeblendete Rezepte</h1>
+      <p class="muted">Rezepte aus deinen Gruppen, die du für dich ausgeblendet hast. Sie erscheinen nicht in der Gruppenansicht,
+        bei „Zufall“ oder in der Kalenderauswahl. Die anderen in der Gruppe sehen sie weiterhin.</p>
+    </div>
+    <fieldset class="panel">
+      <legend>Ausgeblendet</legend>
+      ${hidden.length ? `<ul class="user-list">${hidden.map((h) => `
+        <li class="user-row">
+          <div class="user-info"><a href="#/r/${h.id}"><strong>${esc(h.title)}</strong></a><small class="muted">von ${esc(h.author)}</small></div>
+          <div class="user-actions"><button type="button" class="btn btn-outline" data-unhide="${h.id}">Einblenden</button></div>
+        </li>`).join('')}</ul>`
+        : '<p class="muted user-empty">Du hast keine Rezepte ausgeblendet. Bei Rezepten anderer findest du in der Detailansicht den Button „Ausblenden“.</p>'}
+    </fieldset>
+  </div>`;
+  app.querySelector('.form').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-unhide]');
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/recipes/${btn.dataset.unhide}/hide`, { method: 'DELETE' });
+      meta = null;
+      state.ids = [];
+      toast('Wieder eingeblendet');
+      await reloadMeta();
+      await renderHidden();
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
   });
 }
 

@@ -73,7 +73,7 @@ zwischen „Meine Rezepte“ und den Gruppen um. Hat man ein Rezept kopiert, zei
 eigene Kopie statt des Originals an (keine Doppelten). Gruppenrezepte können auch im Kalender eingeplant
 werden; Kalender und Kategorien selbst bleiben privat. Rezepte anderer lassen sich für sich selbst
 **ausblenden** (Detailansicht → „Ausblenden“): Sie verschwinden dann aus Gruppenansicht, Zufall und
-Kalenderauswahl, die anderen behalten sie. Wieder einblenden unter „Gruppen“.
+Kalenderauswahl, die anderen behalten sie. Wieder einblenden im Benutzermenü unter „Ausgeblendete Rezepte“.
 ## Von außen erreichbar machen
 
 Hinter einem Reverse-Proxy (Caddy, nginx, Traefik) **`TRUST_PROXY` setzen**, sonst sieht die App
