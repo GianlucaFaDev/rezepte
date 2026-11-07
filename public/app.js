@@ -875,19 +875,23 @@ async function renderCalendar(monthStr) {
   const start = new Date(y, m - 1, 1 - ((first.getDay() + 6) % 7));            // Montag davor
   const end = new Date(y, m - 1, last.getDate() + (6 - ((last.getDay() + 6) % 7))); // Sonntag danach
   const plan = await api(`/api/plan?from=${ymd(start)}&to=${ymd(end)}`);
-  const byDay = Object.fromEntries(plan.map((e) => [e.day, e]));
+  const byDay = {}; // Tag → Liste der Gerichte (Vorspeise, Hauptgang, Nachtisch …)
+  for (const e of plan) (byDay[e.day] ||= []).push(e);
   const month = (yy, mm) => ymd(new Date(yy, mm - 1, 1)).slice(0, 7);
   const todayStr = ymd(today);
 
   let cells = '';
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     const day = ymd(d);
-    const e = byDay[day];
+    const list = byDay[day] || [];
+    const e = list.find((x) => x.photo) || list[0]; // Bild: erstes Gericht mit Foto
+    const titles = list.map((x) => x.title).join(' · ');
     const cls = ['cal-day', d.getMonth() !== m - 1 && 'out', day === todayStr && 'today', e && 'has'].filter(Boolean).join(' ');
-    cells += `<button class="${cls}" data-day="${day}" aria-label="${esc(dayLabel(day))}${e ? ': ' + esc(e.title) : ''}">
+    cells += `<button class="${cls}" data-day="${day}" aria-label="${esc(dayLabel(day))}${e ? ': ' + esc(titles) : ''}">
       ${e ? (e.photo ? `<img src="${photoUrl(e.photo)}" alt="" loading="lazy">` : `<span class="cal-dot" style="--dc:${recipeColor(e.id)}"></span>`) : ''}
       <span class="cal-num">${d.getDate()}</span>
-      ${e ? `<span class="cal-title">${esc(e.title)}</span>` : ''}
+      ${list.length > 1 ? `<span class="cal-more">${list.length}</span>` : ''}
+      ${e ? `<span class="cal-title">${esc(titles)}</span>` : ''}
     </button>`;
   }
 
@@ -950,7 +954,7 @@ async function renderCalendar(monthStr) {
     const btn = ev.target.closest('.cal-day');
     if (!btn) return;
     const day = btn.dataset.day;
-    if (!shopSel) return openDaySheet(day, byDay[day], refresh);
+    if (!shopSel) return byDay[day] ? openDaySheet(day, refresh) : showRecipePicker(day, refresh);
     if (!shopSel.start) {
       shopSel.start = day;
       return syncShopUi();
@@ -1173,33 +1177,46 @@ async function renderShoppingList(id) {
   });
 }
 
-function openDaySheet(day, entry, refresh) {
-  if (!entry) return showRecipePicker(day, refresh);
-  const thumb = entry.photo
-    ? `<img src="${photoUrl(entry.photo)}" alt="">`
-    : `<span class="cal-dot" style="--dc:${recipeColor(entry.id)}"></span>`;
+const MAX_PER_DAY = 6;
+
+// Alle Gerichte eines Tages: öffnen, austauschen, entfernen, weiteres hinzufügen
+async function openDaySheet(day, refresh) {
+  let entries;
+  try { entries = await api(`/api/plan?from=${day}&to=${day}`); } catch (e) { return toast(e.message, true); }
+  if (!entries.length) return showRecipePicker(day, refresh);
   const panel = openSheet(`
     <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
-    <a class="plan-recipe" href="#/r/${entry.id}">
-      <span class="plan-thumb">${thumb}</span>
-      <span class="plan-info"><b>${esc(entry.title)}</b><small>Rezept öffnen ›</small></span>
-    </a>
-    <div class="sheet-actions">
-      <button class="btn btn-outline" id="plan-change">Anderes Rezept wählen</button>
-      <button class="btn btn-ghost-danger" id="plan-remove">Entfernen</button>
-    </div>`);
-  $('#plan-change', panel).addEventListener('click', () => showRecipePicker(day, refresh));
-  $('#plan-remove', panel).addEventListener('click', async () => {
+    <div class="plan-list">${entries.map((e) => `
+      <div class="plan-entry">
+        <a class="plan-recipe" href="#/r/${e.id}">
+          <span class="plan-thumb">${e.photo ? `<img src="${photoUrl(e.photo)}" alt="">` : `<span class="cal-dot" style="--dc:${recipeColor(e.id)}"></span>`}</span>
+          <span class="plan-info"><b>${esc(e.title)}</b><small>Rezept öffnen ›</small></span>
+        </a>
+        <div class="plan-entry-actions">
+          <button class="link-btn" data-change="${e.entry}">Tauschen</button>
+          <button class="link-btn danger" data-remove="${e.entry}">Entfernen</button>
+        </div>
+      </div>`).join('')}</div>
+    ${entries.length < MAX_PER_DAY
+      ? '<button class="btn btn-outline plan-add" id="plan-add">+ Weiteres Rezept hinzufügen</button><p class="hint plan-add-hint">z. B. Vorspeise oder Nachtisch</p>'
+      : ''}`);
+  $('#plan-add', panel)?.addEventListener('click', () => showRecipePicker(day, refresh));
+  $('.plan-list', panel).addEventListener('click', async (ev) => {
+    const change = ev.target.closest('[data-change]');
+    if (change) return showRecipePicker(day, refresh, Number(change.dataset.change));
+    const remove = ev.target.closest('[data-remove]');
+    if (!remove) return;
     try {
-      await api('/api/plan/' + day, { method: 'DELETE' });
-      closeSheet();
+      await api('/api/plan/' + remove.dataset.remove, { method: 'DELETE' });
       toast('Entfernt');
-      refresh();
+      await refresh();
+      if (entries.length > 1) openDaySheet(day, refresh); else closeSheet();
     } catch (e) { toast(e.message, true); }
   });
 }
 
-async function showRecipePicker(day, refresh) {
+// entryId gesetzt: dieses Gericht austauschen, sonst ein Gericht zum Tag hinzufügen
+async function showRecipePicker(day, refresh, entryId = null) {
   const panel = openSheet(`
     <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
     <input type="search" class="pick-search" placeholder="Rezept suchen…" autocomplete="off">
@@ -1229,12 +1246,14 @@ async function showRecipePicker(day, refresh) {
     const item = e.target.closest('.pick-item');
     if (!item) return;
     try {
-      const saved = await api('/api/plan/' + day, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipe_id: Number(item.dataset.id) }),
+      const recipe_id = Number(item.dataset.id);
+      const saved = await api(entryId ? '/api/plan/' + entryId : '/api/plan', {
+        method: entryId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entryId ? { recipe_id } : { day, recipe_id }),
       });
-      closeSheet();
       toast(`${saved.title} eingeplant ✓`);
-      refresh();
+      await refresh();
+      openDaySheet(day, refresh); // Tagesübersicht zeigen, damit direkt ein weiteres Gericht dazukommen kann
     } catch (err) { toast(err.message, true); }
   });
 }

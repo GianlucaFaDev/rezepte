@@ -497,6 +497,14 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .plan-info b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plan-info small { color: var(--muted); }
 .plan-recipe .plan-info small { color: var(--green); font-weight: 700; }
+.plan-list { display: flex; flex-direction: column; gap: .7rem; }
+.plan-entry-actions { display: flex; justify-content: flex-end; gap: 1.2rem; padding: .25rem .3rem 0; }
+.link-btn.danger { color: #c0392b; }
+.plan-add { width: 100%; margin-top: 1rem; justify-content: center; }
+.plan-add-hint { text-align: center; margin: .35rem 0 0; }
+.cal-more { position: absolute; top: 6px; right: 6px; min-width: 1.4rem; padding: .05rem .35rem; border-radius: 999px; font-size: .75rem; font-weight: 800;
+  text-align: center; background: var(--green); color: #fff; }
+@media (max-width: 640px) { .cal-more { top: 3px; right: 3px; font-size: .65rem; min-width: 1.1rem; padding: 0 .2rem; } }
 .pick-search { width: 100%; padding: .65rem .8rem; border: 1.5px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); margin-bottom: .7rem; font: inherit; }
 .pick-search:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
 .pick-list { display: flex; flex-direction: column; gap: .45rem; }

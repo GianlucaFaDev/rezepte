@@ -94,11 +94,28 @@ if (!db.prepare('PRAGMA table_info(recipes)').all().some((c) => c.name === 'shar
 }
 db.exec(`
 CREATE TABLE IF NOT EXISTS meal_plan (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   day       TEXT NOT NULL,                -- YYYY-MM-DD
   recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
-  PRIMARY KEY (user_id, day)
+  position  INTEGER NOT NULL DEFAULT 0
 );`);
+// Migration: früher nur ein Rezept pro Tag (Primärschlüssel user_id + day). Jetzt mehrere Gerichte pro Tag
+// (Vorspeise, Hauptgang, Nachtisch …), deshalb Tabelle mit eigener ID neu aufbauen und Einträge übernehmen.
+if (!db.prepare('PRAGMA table_info(meal_plan)').all().some((c) => c.name === 'id')) {
+  db.transaction(() => db.exec(`
+    CREATE TABLE meal_plan_new (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day       TEXT NOT NULL,
+      recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+      position  INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO meal_plan_new (user_id, day, recipe_id) SELECT user_id, day, recipe_id FROM meal_plan;
+    DROP TABLE meal_plan;
+    ALTER TABLE meal_plan_new RENAME TO meal_plan;`))();
+}
+db.exec('CREATE INDEX IF NOT EXISTS idx_meal_plan_day ON meal_plan(user_id, day)');
 // Migration: Freischaltung neuer Konten durch einen Admin.
 // Bestehende Konten gelten als freigeschaltet, der älteste Benutzer wird Admin.
 if (!db.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'approved')) {
@@ -882,7 +899,7 @@ app.delete('/api/options', (req, res) => {
 // ---------- Kalender / Essensplan (ein Rezept pro Tag) ----------
 const isDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && new Date(d + 'T00:00:00Z').toISOString().slice(0, 10) === d;
 const PLAN_SELECT = `
-  SELECT m.day, r.id, r.title, r.user_id AS owner,
+  SELECT m.id AS entry, m.day, r.id, r.title, r.user_id AS owner,
     (SELECT filename FROM photos p WHERE p.recipe_id = r.id ORDER BY position, id LIMIT 1) AS photo
   FROM meal_plan m JOIN recipes r ON r.id = m.recipe_id`;
 // Eingeplant werden können eigene Rezepte und Rezepte aus Gruppen. Wer eine Gruppe verlässt,
@@ -896,26 +913,44 @@ const planRow = (row, userId) => {
 app.get('/api/plan', (req, res) => {
   const { from, to } = req.query;
   if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: 'Ungültiger Zeitraum' });
-  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day BETWEEN ? AND ? ORDER BY m.day`).all(req.user.id, from, to)
-    .map((row) => planRow(row, req.user.id)).filter(Boolean));
+  res.json(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day BETWEEN ? AND ? ORDER BY m.day, m.position, m.id`)
+    .all(req.user.id, from, to).map((row) => planRow(row, req.user.id)).filter(Boolean));
 });
 
-app.put('/api/plan/:day', express.json({ limit: '1kb' }), (req, res) => {
-  const { day } = req.params;
-  if (!isDay(day)) return res.status(400).json({ error: 'Ungültiges Datum' });
+const MAX_PER_DAY = 6;
+const planJson = express.json({ limit: '1kb' });
+const viewableRecipe = (id, userId) => {
+  const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(id);
+  return !!row && canView(row.user_id, userId);
+};
+const planEntry = (entryId, userId) =>
+  planRow(db.prepare(`${PLAN_SELECT} WHERE m.id = ? AND m.user_id = ?`).get(entryId, userId), userId);
+
+// Gericht zu einem Tag hinzufügen
+app.post('/api/plan', planJson, (req, res) => {
+  const day = req.body?.day;
   const recipeId = Number(req.body?.recipe_id);
-  const owner = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(recipeId);
-  if (!owner || !canView(owner.user_id, req.user.id)) {
-    return res.status(404).json({ error: 'Rezept nicht gefunden' });
-  }
-  db.prepare(`INSERT INTO meal_plan (user_id, day, recipe_id) VALUES (?, ?, ?)
-              ON CONFLICT (user_id, day) DO UPDATE SET recipe_id = excluded.recipe_id`).run(req.user.id, day, recipeId);
-  res.json(planRow(db.prepare(`${PLAN_SELECT} WHERE m.user_id = ? AND m.day = ?`).get(req.user.id, day), req.user.id));
+  if (!isDay(day)) return res.status(400).json({ error: 'Ungültiges Datum' });
+  if (!viewableRecipe(recipeId, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  const { n, pos } = db.prepare('SELECT COUNT(*) AS n, COALESCE(MAX(position), -1) + 1 AS pos FROM meal_plan WHERE user_id = ? AND day = ?')
+    .get(req.user.id, day);
+  if (n >= MAX_PER_DAY) return res.status(400).json({ error: `Höchstens ${MAX_PER_DAY} Gerichte pro Tag` });
+  const info = db.prepare('INSERT INTO meal_plan (user_id, day, recipe_id, position) VALUES (?, ?, ?, ?)')
+    .run(req.user.id, day, recipeId, pos);
+  res.status(201).json(planEntry(info.lastInsertRowid, req.user.id));
 });
 
-app.delete('/api/plan/:day', (req, res) => {
-  if (!isDay(req.params.day)) return res.status(400).json({ error: 'Ungültiges Datum' });
-  db.prepare('DELETE FROM meal_plan WHERE user_id = ? AND day = ?').run(req.user.id, req.params.day);
+// Gericht eines Eintrags austauschen
+app.put('/api/plan/:entry', planJson, (req, res) => {
+  const recipeId = Number(req.body?.recipe_id);
+  if (!viewableRecipe(recipeId, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  const info = db.prepare('UPDATE meal_plan SET recipe_id = ? WHERE id = ? AND user_id = ?').run(recipeId, req.params.entry, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Eintrag nicht gefunden' });
+  res.json(planEntry(req.params.entry, req.user.id));
+});
+
+app.delete('/api/plan/:entry', (req, res) => {
+  db.prepare('DELETE FROM meal_plan WHERE id = ? AND user_id = ?').run(req.params.entry, req.user.id);
   res.status(204).end();
 });
 
