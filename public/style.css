@@ -179,11 +179,11 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .rcard-big .rcard-badge { width: 84px; height: 76px; }
 .rcard-big .rcard-badge span { width: 50px; height: 50px; font-size: 1.3rem; }
 .rcard-big .rcard-photo img { cursor: zoom-in; }
-/* Detailansicht: ganzes Foto zeigen, Rand mit verschwommener Version desselben Fotos füllen */
-.rcard-big .rcard-photo { position: relative; }
-.rcard-big .rcard-photo::before { content: ''; position: absolute; inset: -24px; background: var(--ph) center / cover no-repeat;
+/* Übersicht und Detailansicht: ganzes Foto zeigen, Rand mit verschwommener Version desselben Fotos füllen */
+.rcard-photo.has-ph { position: relative; }
+.rcard-photo.has-ph::before { content: ''; position: absolute; inset: -24px; background: var(--ph) center / cover no-repeat;
   filter: blur(20px) brightness(.92); }
-.rcard-big .rcard-photo img { position: relative; object-fit: contain; }
+.rcard-photo.has-ph img { position: relative; object-fit: contain; }
 .video-row { margin: 0 0 1.2rem; }
 .video-row .btn small { font-weight: 600; }
 .rcard-big .rcard-ings { width: 220px; padding: 1.1rem .8rem; }

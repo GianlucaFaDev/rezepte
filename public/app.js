@@ -285,7 +285,7 @@ function recipeCard(r, { link = true, big = false } = {}) {
       </div>
     </div>
     <div class="rcard-main">
-      <div class="rcard-photo"${big && photo ? ` style="--ph:url('${photoUrl(photo)}')"` : ''}>${photo ? `<img loading="lazy" src="${photoUrl(photo)}" alt="">` : placeholder(r.id)}</div>
+      <div class="rcard-photo${photo ? ' has-ph' : ''}"${photo ? ` style="--ph:url('${photoUrl(photo)}')"` : ''}>${photo ? `<img loading="lazy" src="${photoUrl(photo)}" alt="">` : placeholder(r.id)}</div>
       ${ingList ? `<ul class="rcard-ings">${ingList}</ul>` : ''}
     </div>
   </${tag}>`;
