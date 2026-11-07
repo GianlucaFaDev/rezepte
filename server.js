@@ -151,6 +151,18 @@ CREATE TABLE IF NOT EXISTS hidden_recipes (
   recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
   PRIMARY KEY (user_id, recipe_id)
 );`);
+// Gespeicherte Einkaufslisten. Gerichte und Positionen als JSON ([titel], [{q, n, done}]).
+db.exec(`
+CREATE TABLE IF NOT EXISTS shopping_lists (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  from_day   TEXT NOT NULL,
+  to_day     TEXT NOT NULL,
+  dishes     TEXT NOT NULL DEFAULT '[]',
+  items      TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_shopping_user ON shopping_lists(user_id);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -955,6 +967,50 @@ app.get('/api/hidden', (req, res) => {
                            JOIN recipes r ON r.id = h.recipe_id JOIN users u ON u.id = r.user_id
                            WHERE h.user_id = ? ORDER BY r.title COLLATE NOCASE`).all(req.user.id);
   res.json(rows.filter((r) => canView(r.user_id, req.user.id)).map(({ user_id, ...r }) => r));
+});
+
+// ---------- Einkaufslisten ----------
+const MAX_LISTS = 50;
+const shopJson = express.json({ limit: '64kb' });
+const cleanItems = (items) => (Array.isArray(items) ? items : []).slice(0, 300)
+  .map((it) => ({ q: String(it?.q ?? '').trim().slice(0, 40), n: String(it?.n ?? '').trim().slice(0, 200), done: !!it?.done }))
+  .filter((it) => it.n);
+const listRow = (r) => ({
+  id: r.id, from: r.from_day, to: r.to_day, created_at: r.created_at,
+  dishes: JSON.parse(r.dishes), items: JSON.parse(r.items),
+});
+
+app.get('/api/shopping', (req, res) => {
+  res.json(db.prepare('SELECT * FROM shopping_lists WHERE user_id = ? ORDER BY created_at DESC, id DESC')
+    .all(req.user.id).map(listRow));
+});
+app.get('/api/shopping/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM shopping_lists WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'Einkaufsliste nicht gefunden' });
+  res.json(listRow(row));
+});
+app.post('/api/shopping', shopJson, (req, res) => {
+  const { from, to } = req.body || {};
+  if (!isDay(from) || !isDay(to) || from > to) return res.status(400).json({ error: 'Ungültiger Zeitraum' });
+  const items = cleanItems(req.body.items);
+  if (!items.length) return res.status(400).json({ error: 'Die Liste ist leer' });
+  const count = db.prepare('SELECT COUNT(*) AS n FROM shopping_lists WHERE user_id = ?').get(req.user.id).n;
+  if (count >= MAX_LISTS) return res.status(400).json({ error: `Höchstens ${MAX_LISTS} Listen, bitte alte löschen` });
+  const dishes = (Array.isArray(req.body.dishes) ? req.body.dishes : []).slice(0, 62).map((d) => String(d).slice(0, 200));
+  const info = db.prepare('INSERT INTO shopping_lists (user_id, from_day, to_day, dishes, items) VALUES (?, ?, ?, ?, ?)')
+    .run(req.user.id, from, to, JSON.stringify(dishes), JSON.stringify(items));
+  res.status(201).json(listRow(db.prepare('SELECT * FROM shopping_lists WHERE id = ?').get(info.lastInsertRowid)));
+});
+// Positionen ändern (abhaken)
+app.put('/api/shopping/:id', shopJson, (req, res) => {
+  const info = db.prepare('UPDATE shopping_lists SET items = ? WHERE id = ? AND user_id = ?')
+    .run(JSON.stringify(cleanItems(req.body?.items)), req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Einkaufsliste nicht gefunden' });
+  res.status(204).end();
+});
+app.delete('/api/shopping/:id', (req, res) => {
+  db.prepare('DELETE FROM shopping_lists WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  res.status(204).end();
 });
 
 // Rezept eines Gruppenmitglieds ins eigene Kochbuch kopieren

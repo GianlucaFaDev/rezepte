@@ -77,6 +77,7 @@ const ICON = {
   stack: '<svg viewBox="0 0 24 24" class="ic"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="11" width="18" height="9" rx="1"/></svg>',
   plate: '<svg viewBox="0 0 24 24" class="ic"><circle cx="12" cy="13" r="7"/><circle cx="12" cy="13" r="3.5"/><path d="M3 4v5M3 9v11M21 4c-1.5 1-2 3-2 5h2v11"/></svg>',
   share: '<svg viewBox="0 0 24 24" class="ic"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.9l7.6-4.6M8.2 13.1l7.6 4.6"/></svg>',
+  cart: '<svg viewBox="0 0 24 24" class="ic"><path d="M3 4h2.5l2.2 10.5a1.5 1.5 0 0 0 1.5 1.2h8.3a1.5 1.5 0 0 0 1.5-1.1L21 8H6.3"/><circle cx="10" cy="20" r="1.4"/><circle cx="17" cy="20" r="1.4"/></svg>',
   grid: '<svg viewBox="0 0 24 24" class="ic"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>',
 };
 
@@ -293,7 +294,9 @@ function recipeCard(r, { link = true, big = false } = {}) {
 // ================= Router =================
 async function route() {
   if (cleanup) { cleanup(); cleanup = null; }
+  closeSheet();
   const [, view, id] = (location.hash.slice(1) || '/').split('/');
+  if (view !== 'kalender') shopSel = null;
   shareToken = view === 's' ? id : null;
   if (!shareToken) document.title = 'Kochbuch';
   try {
@@ -311,6 +314,7 @@ async function route() {
     else if (view === 'gruppen') await renderGroups();
     else if (view === 'ausgeblendet') await renderHidden();
     else if (view === 'kalender') await renderCalendar(id);
+    else if (view === 'einkaufslisten') await renderShopping(id);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
     else if (view === 'edit') await renderForm(id);
@@ -857,6 +861,7 @@ $('#sheet').addEventListener('click', (e) => {
 
 // ================= Kalender =================
 const WEEKDAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+let shopSel = null; // Zeitraumauswahl für die Einkaufsliste: null oder { start: 'YYYY-MM-DD' | null }
 const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const dayLabel = (day) => new Date(day + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' });
 
@@ -896,8 +901,12 @@ async function renderCalendar(monthStr) {
         <a class="btn btn-outline cal-arrow" href="#/kalender/${month(y, m + 1)}" aria-label="Nächster Monat">${ICON.right}</a>
         <a class="link-btn cal-today" href="#/kalender">Heute</a>
       </div>
+      <div class="cal-shop">
+        <button class="btn btn-outline" id="shop-btn">${ICON.cart} Einkaufsliste</button>
+        <a class="link-btn" href="#/einkaufslisten">Gespeicherte</a>
+      </div>
     </div>
-    <p class="muted cal-hint">Tag antippen, um ein Gericht zu planen.</p>
+    <p class="muted cal-hint" id="cal-hint">Tag antippen, um ein Gericht zu planen.</p>
     <div class="cal-grid">
       ${WEEKDAYS.map((w) => `<div class="cal-wd">${w}</div>`).join('')}
       ${cells}
@@ -905,9 +914,262 @@ async function renderCalendar(monthStr) {
   </section>`;
 
   const refresh = () => renderCalendar(monthStr);
-  $('.cal-grid').addEventListener('click', (ev) => {
+  const grid = $('.cal-grid');
+  const hint = $('#cal-hint');
+  const shopBtn = $('#shop-btn');
+
+  // Einkaufsliste: Zeitraum mit zwei Klicks/Taps wählen (erster und letzter Tag).
+  // Die Auswahl steht in shopSel und bleibt beim Monatswechsel erhalten.
+  const markRange = (a, b) => $$('.cal-day', grid).forEach((c) => {
+    const d = c.dataset.day;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    c.classList.toggle('in-range', !!a && d >= lo && d <= hi);
+    c.classList.toggle('range-edge', !!a && (d === a || d === b));
+  });
+  const syncShopUi = () => {
+    const on = !!shopSel;
+    grid.classList.toggle('selecting', on);
+    hint.classList.toggle('cal-hint-active', on);
+    shopBtn.innerHTML = on ? 'Abbrechen' : `${ICON.cart} Einkaufsliste`;
+    hint.innerHTML = !on ? 'Tag antippen, um ein Gericht zu planen.'
+      : !shopSel.start ? '<b>Einkaufsliste:</b> ersten Tag des Zeitraums antippen.'
+        : `<b>Ab ${esc(shortDay(shopSel.start))}:</b> jetzt den letzten Tag antippen, gern auch in einem anderen Monat. Nur dieser eine Tag: nochmal antippen.`;
+    markRange(shopSel?.start, shopSel?.start);
+  };
+  syncShopUi();
+  shopBtn.addEventListener('click', () => {
+    shopSel = shopSel ? null : { start: null };
+    syncShopUi();
+  });
+  grid.addEventListener('mouseover', (ev) => {
+    const c = ev.target.closest('.cal-day');
+    if (shopSel?.start && c) markRange(shopSel.start, c.dataset.day);
+  });
+
+  grid.addEventListener('click', (ev) => {
     const btn = ev.target.closest('.cal-day');
-    if (btn) openDaySheet(btn.dataset.day, byDay[btn.dataset.day], refresh);
+    if (!btn) return;
+    const day = btn.dataset.day;
+    if (!shopSel) return openDaySheet(day, byDay[day], refresh);
+    if (!shopSel.start) {
+      shopSel.start = day;
+      return syncShopUi();
+    }
+    const [from, to] = shopSel.start < day ? [shopSel.start, day] : [day, shopSel.start];
+    if ((new Date(to) - new Date(from)) / 864e5 > 62) return toast('Bitte höchstens zwei Monate auswählen', true);
+    shopSel = null;
+    syncShopUi();
+    openShoppingList(from, to);
+  });
+}
+
+// ================= Einkaufsliste =================
+// Gewichte und Volumen auf eine Einheit bringen, damit 500 g + 1 kg zusammengezählt werden
+const UNIT_BASE = { mg: ['g', 0.001], g: ['g', 1], kg: ['g', 1000], ml: ['ml', 1], cl: ['ml', 10], dl: ['ml', 100], l: ['ml', 1000] };
+const UNIT_ALIAS = { stk: 'Stück', stück: 'Stück', zehen: 'Zehe', dosen: 'Dose', prisen: 'Prise', scheiben: 'Scheibe', tassen: 'Tasse',
+  zweige: 'Zweig', stangen: 'Stange', knollen: 'Knolle', gläser: 'Glas', blätter: 'Blatt', päckchen: 'Pck', packung: 'Pck', pck: 'Pck' };
+
+function buildShoppingList(recipes) {
+  const items = new Map();
+  for (const r of recipes) {
+    for (const ing of parseIngredients(r.ingredients)) {
+      if (ing.heading || !ing.name) continue;
+      const u = ing.unit.toLowerCase();
+      const base = UNIT_BASE[u];
+      const unit = base ? base[0] : (UNIT_ALIAS[u] || ing.unit);
+      const name = ing.name.trim().replace(/\s+/g, ' ');
+      const key = name.toLowerCase() + '|' + unit.toLowerCase();
+      const it = items.get(key) || { name, unit, amount: 0, counted: false, open: false, from: new Set() };
+      const a = ing.amountTo ?? ing.amount; // bei „2–3“ lieber die größere Menge kaufen
+      if (a != null && isFinite(a)) { it.amount += a * (base ? base[1] : 1); it.counted = true; }
+      else it.open = true;
+      it.from.add(r.title);
+      items.set(key, it);
+    }
+  }
+  return [...items.values()].sort((a, b) => a.name.localeCompare(b.name, 'de'));
+}
+
+function shopQty(it) {
+  if (!it.counted) return '';
+  let { amount, unit } = it;
+  if (unit === 'g' && amount >= 1000) { amount /= 1000; unit = 'kg'; }
+  if (unit === 'ml' && amount >= 1000) { amount /= 1000; unit = 'l'; }
+  return `${fmtAmount(amount)}${unit ? ' ' + unit : ''}${it.open ? ' +' : ''}`;
+}
+
+const shortDay = (d) => new Date(d + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+const rangeLabel = (from, to) => (from === to ? shortDay(from) : `${shortDay(from)} – ${shortDay(to)}`);
+
+// Positionen als Abhakliste. items: [{ q, n, done, note? }]
+const shopListHtml = (items) => `<ul class="shop-list">${items.map((it, i) => `<li><label>
+    <input type="checkbox" data-i="${i}"${it.done ? ' checked' : ''}>
+    <span class="shop-q">${esc(it.q)}</span>
+    <span class="shop-n">${esc(it.n)}${it.note ? `<small>${esc(it.note)}</small>` : ''}</span>
+  </label></li>`).join('')}</ul>`;
+const shopText = (title, items) => [title, ...items.filter((it) => !it.done)
+  .map((it) => `- ${[it.q, it.n].filter(Boolean).join(' ')}`)].join('\n');
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = Object.assign(document.createElement('textarea'), { value: text });
+    document.body.append(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  toast('Einkaufsliste kopiert ✓');
+}
+const shareText = (text) => navigator.share({ title: 'Einkaufsliste', text }).catch(() => {});
+
+// Häkchen in einer Abhakliste auf items übertragen
+function bindChecks(root, items, onChange) {
+  $('.shop-list', root)?.addEventListener('change', (e) => {
+    const box = e.target.closest('input[data-i]');
+    if (!box) return;
+    items[box.dataset.i].done = box.checked;
+    onChange?.();
+  });
+}
+
+async function openShoppingList(from, to) {
+  const range = rangeLabel(from, to);
+  const panel = openSheet('<h2 class="sheet-h">Einkaufsliste</h2><div class="loading">Lade…</div>');
+  let recipes;
+  try {
+    const entries = await api(`/api/plan?from=${from}&to=${to}`);
+    if (!entries.length) { closeSheet(); return toast(`Für ${range} ist nichts geplant`, true); }
+    const ids = [...new Set(entries.map((e) => e.id))];
+    const byId = Object.fromEntries((await Promise.all(ids.map((id) => api('/api/recipes/' + id)))).map((r) => [r.id, r]));
+    recipes = entries.map((e) => byId[e.id]).filter(Boolean); // dasselbe Rezept an zwei Tagen zählt doppelt
+  } catch (e) { closeSheet(); return toast(e.message, true); }
+  const items = buildShoppingList(recipes).map((it) => ({
+    q: shopQty(it), n: it.name, done: false, note: it.from.size > 1 ? `${it.from.size} Gerichte` : '',
+  }));
+  const dishes = recipes.map((r) => r.title);
+
+  panel.innerHTML = `<button class="sheet-x" aria-label="Schließen">×</button>
+    <h2 class="sheet-h">Einkaufsliste</h2>
+    <p class="shop-range"><b>${esc(range)}</b> · ${dishes.length} ${dishes.length === 1 ? 'Gericht' : 'Gerichte'}</p>
+    <p class="shop-dishes muted">${dishes.map(esc).join(' · ')}</p>
+    ${items.length ? `<p class="hint">Hak ab, was du schon zu Hause hast. Abgehaktes wird beim Kopieren weggelassen.</p>
+    ${shopListHtml(items)}
+    <div class="sheet-actions shop-actions">
+      <button class="btn btn-primary" id="shop-save">Speichern</button>
+      <button class="btn btn-outline" id="shop-copy">Kopieren</button>
+      ${navigator.share ? '<button class="btn btn-outline" id="shop-share">Teilen</button>' : ''}
+    </div>` : '<p class="muted">Die geplanten Rezepte haben keine Zutaten eingetragen.</p>'}`;
+
+  bindChecks(panel, items);
+  const text = () => shopText(`Einkaufsliste ${range}`, items);
+  $('#shop-copy', panel)?.addEventListener('click', () => copyText(text()));
+  $('#shop-share', panel)?.addEventListener('click', () => shareText(text()));
+  $('#shop-save', panel)?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const saved = await api('/api/shopping', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to, dishes, items: items.map(({ q, n, done }) => ({ q, n, done })) }),
+      });
+      btn.outerHTML = `<a class="btn btn-primary" href="#/einkaufslisten/${saved.id}">Gespeichert ✓ Öffnen</a>`;
+      toast('Unter Benutzer → Einkaufslisten gespeichert');
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+}
+
+// ================= Gespeicherte Einkaufslisten =================
+const fmtCreated = (s) => new Date(s.replace(' ', 'T') + 'Z').toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+
+async function renderShopping(id) {
+  if (id) return renderShoppingList(id);
+  const lists = await api('/api/shopping');
+  window.scrollTo(0, 0);
+  app.innerHTML = `
+  <div class="form">
+    <div class="form-head">
+      <a href="#/kalender" class="back">${ICON.left} Kalender</a>
+      <h1>Einkaufslisten</h1>
+      <p class="muted">Neue Liste: im Kalender auf „Einkaufsliste“ tippen, ersten und letzten Tag wählen und dann „Speichern“.</p>
+    </div>
+    <fieldset class="panel">
+      <legend>Gespeichert</legend>
+      ${lists.length ? `<ul class="user-list">${lists.map((l) => {
+        const done = l.items.filter((it) => it.done).length;
+        return `<li class="user-row">
+          <div class="user-info"><a href="#/einkaufslisten/${l.id}"><strong>${esc(rangeLabel(l.from, l.to))}</strong></a>
+            <small class="muted">${done} von ${l.items.length} erledigt · ${esc(l.dishes.join(', '))}</small>
+            <small class="muted">erstellt ${esc(fmtCreated(l.created_at))}</small></div>
+          <div class="user-actions">
+            <a class="btn btn-outline" href="#/einkaufslisten/${l.id}">Öffnen</a>
+            <button type="button" class="btn btn-ghost-danger" data-del="${l.id}">Löschen</button>
+          </div>
+        </li>`;
+      }).join('')}</ul>` : '<p class="muted user-empty">Noch keine Einkaufslisten gespeichert.</p>'}
+    </fieldset>
+  </div>`;
+  app.querySelector('.form').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-del]');
+    if (!btn || !confirm('Diese Einkaufsliste löschen?')) return;
+    try {
+      await api('/api/shopping/' + btn.dataset.del, { method: 'DELETE' });
+      toast('Gelöscht');
+      await renderShopping();
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+async function renderShoppingList(id) {
+  const l = await api('/api/shopping/' + encodeURIComponent(id));
+  const range = rangeLabel(l.from, l.to);
+  window.scrollTo(0, 0);
+  app.innerHTML = `
+  <div class="form">
+    <div class="form-head">
+      <a href="#/einkaufslisten" class="back">${ICON.left} Alle Einkaufslisten</a>
+      <h1>Einkaufsliste</h1>
+      <p class="shop-range"><b>${esc(range)}</b> · erstellt ${esc(fmtCreated(l.created_at))}</p>
+      <p class="shop-dishes muted">${l.dishes.map(esc).join(' · ')}</p>
+    </div>
+    <div class="panel shop-panel">
+      <p class="hint" id="shop-count"></p>
+      ${shopListHtml(l.items)}
+      <div class="sheet-actions shop-actions">
+        <button class="btn btn-primary" id="shop-copy">Kopieren</button>
+        ${navigator.share ? '<button class="btn btn-outline" id="shop-share">Teilen</button>' : ''}
+        <button class="btn btn-outline" id="shop-reset">Häkchen zurücksetzen</button>
+        <button class="btn btn-ghost-danger" id="shop-del">Löschen</button>
+      </div>
+    </div>
+  </div>`;
+  const count = () => {
+    const done = l.items.filter((it) => it.done).length;
+    $('#shop-count').textContent = done === l.items.length ? 'Alles erledigt 🎉'
+      : `${done} von ${l.items.length} erledigt. Häkchen werden gespeichert, Kopieren lässt Erledigtes weg.`;
+  };
+  count();
+  const save = () => api('/api/shopping/' + l.id, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: l.items }),
+  }).catch((err) => toast(err.message, true));
+  bindChecks(app, l.items, () => { count(); save(); });
+  const text = () => shopText(`Einkaufsliste ${range}`, l.items);
+  $('#shop-copy').addEventListener('click', () => copyText(text()));
+  $('#shop-share')?.addEventListener('click', () => shareText(text()));
+  $('#shop-reset').addEventListener('click', () => {
+    l.items.forEach((it) => { it.done = false; });
+    $$('.shop-list input').forEach((b) => { b.checked = false; });
+    count();
+    save();
+  });
+  $('#shop-del').addEventListener('click', async () => {
+    if (!confirm('Diese Einkaufsliste löschen?')) return;
+    try {
+      await api('/api/shopping/' + l.id, { method: 'DELETE' });
+      toast('Gelöscht');
+      location.hash = '#/einkaufslisten';
+    } catch (err) { toast(err.message, true); }
   });
 }
 

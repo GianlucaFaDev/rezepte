@@ -74,6 +74,12 @@ eigene Kopie statt des Originals an (keine Doppelten). Gruppenrezepte können au
 werden; Kalender und Kategorien selbst bleiben privat. Rezepte anderer lassen sich für sich selbst
 **ausblenden** (Detailansicht → „Ausblenden“): Sie verschwinden dann aus Gruppenansicht, Zufall und
 Kalenderauswahl, die anderen behalten sie. Wieder einblenden im Benutzermenü unter „Ausgeblendete Rezepte“.
+
+**Einkaufsliste:** Im Kalender auf „Einkaufsliste“ tippen, dann ersten und letzten Tag antippen (auch über
+Monatsgrenzen). Die Zutaten der geplanten Gerichte werden zusammengerechnet (g/kg und ml/l werden
+umgerechnet). Die Liste lässt sich kopieren, teilen oder speichern; gespeicherte Listen stehen im
+Benutzermenü unter „Einkaufslisten“, dort bleiben Häkchen erhalten.
+
 ## Von außen erreichbar machen
 
 Hinter einem Reverse-Proxy (Caddy, nginx, Traefik) **`TRUST_PROXY` setzen**, sonst sieht die App

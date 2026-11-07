@@ -439,6 +439,36 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .cal-title { position: absolute; left: 0; right: 0; bottom: 0; padding: 1.2rem .45rem .35rem; font-size: .76rem; font-weight: 700; line-height: 1.2;
   color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, .72)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cal-day.has:not(:has(img)) .cal-title { color: var(--ink); background: none; }
+.cal-shop { display: flex; align-items: center; gap: .7rem; }
+#shop-btn { display: inline-flex; align-items: center; gap: .4rem; }
+.cal-hint.cal-hint-active { position: sticky; top: 64px; z-index: 5; color: var(--ink); background: var(--green-soft); border: 1.5px solid var(--green);
+  border-radius: 10px; padding: .6rem .8rem; }
+.cal-grid.selecting .cal-day { cursor: cell; }
+.cal-day.in-range { border-color: var(--green); box-shadow: inset 0 0 0 999px rgba(47, 125, 79, .22); }
+.cal-day.in-range img { opacity: .75; }
+.cal-day.range-edge { border-width: 3px; }
+
+/* ---------- Einkaufsliste ---------- */
+.shop-range { margin: -.4rem 0 .2rem; }
+.shop-dishes { margin: 0 0 .6rem; font-size: .88rem; }
+.shop-list { list-style: none; margin: .4rem 0 0; padding: 0; border-top: 1px solid var(--line); }
+.shop-list li { border-bottom: 1px solid var(--line); }
+.shop-list label { display: flex; align-items: baseline; gap: .7rem; padding: .55rem .2rem; cursor: pointer; }
+.shop-list input { accent-color: var(--green); width: 1.1rem; height: 1.1rem; flex: 0 0 auto; align-self: center; }
+.shop-q { min-width: 4.8rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.shop-n small { display: block; color: var(--muted); font-size: .76rem; }
+.shop-list label:has(input:checked) { opacity: .45; }
+.shop-list label:has(input:checked) .shop-n, .shop-list label:has(input:checked) .shop-q { text-decoration: line-through; }
+.shop-panel .shop-list { margin-top: 0; }
+.shop-actions { justify-content: flex-start; }
+.shop-actions #shop-del { margin-left: auto; }
+.form-head .shop-range { margin: .2rem 0 0; }
+@media (max-width: 640px), (pointer: coarse) {
+  .shop-list label { padding: .8rem .2rem; font-size: 1.05rem; }
+  .shop-list input { width: 1.4rem; height: 1.4rem; }
+  .shop-actions .btn { flex: 1 1 auto; justify-content: center; }
+  .shop-actions #shop-del { margin-left: 0; }
+}
 @media (max-width: 640px) {
   .cal-head h1 { font-size: 1.4rem; }
   .cal-month { min-width: 7.5rem; font-size: .95rem; }
