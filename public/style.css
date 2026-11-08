@@ -513,3 +513,69 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
   .sheet-panel { max-width: none; border-radius: 16px 16px 0 0; max-height: 85vh; padding-bottom: calc(1.3rem + env(safe-area-inset-bottom)); }
 }
 .menu-item { white-space: nowrap; }
+
+/* ---------- Eventplaner ---------- */
+.ev-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.ev-head h1 { margin-bottom: .5rem; }
+.ev-section { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--green); margin: 1.4rem 0 .6rem; }
+.ev-list { display: flex; flex-direction: column; gap: .6rem; }
+.ev-past { opacity: .7; }
+.ev-card { display: flex; align-items: center; gap: 1rem; padding: .8rem 1rem; background: var(--paper); border: 1.5px solid var(--line); border-radius: 12px;
+  color: inherit; text-decoration: none; box-shadow: var(--shadow); }
+.ev-card:hover { border-color: var(--green); }
+.ev-date { flex: none; width: 3.6rem; text-align: center; padding: .35rem 0; border-radius: 10px; background: var(--green-soft); color: var(--green); line-height: 1.1; }
+.ev-date b { display: block; font-size: 1.5rem; font-weight: 800; }
+.ev-date small { font-size: .78rem; font-weight: 700; text-transform: uppercase; }
+.ev-info { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
+.ev-info strong { font-size: 1.05rem; overflow-wrap: anywhere; }
+.ev-info small { font-size: .85rem; }
+.ev-meta { font-weight: 700; line-height: 1.6; margin: 0 0 .3rem; }
+.form-head .ev-by { margin: 0 0 .6rem; }
+.ev-desc { margin: .4rem 0 .8rem; line-height: 1.55; }
+.ev-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.2rem; }
+.ev-course { clear: both; margin-bottom: 1rem; }
+.ev-course h3 { margin: 0 0 .45rem; font-size: 1rem; font-weight: 800; padding-bottom: .3rem; border-bottom: 2px solid var(--green-soft); }
+.ev-recipe { margin-bottom: .55rem; }
+.ev-recipe-actions { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; padding: .3rem .3rem 0; }
+.ev-recipe-actions select { padding: .25rem .4rem; border: 1.5px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink); font: inherit; font-size: .85rem; }
+.ev-empty { margin: 0 0 .4rem; font-size: .9rem; }
+.ev-add { width: 100%; justify-content: center; }
+.ev-members { clear: both; list-style: none; margin: 0 0 .8rem; padding: 0; display: flex; flex-wrap: wrap; gap: .45rem; }
+.ev-member { display: inline-flex; align-items: center; gap: .35rem; padding: .3rem .4rem .3rem .8rem; border: 1.5px solid var(--line); border-radius: 999px; font-weight: 700; font-size: .92rem; }
+.ev-member:not(:has(.ev-x)) { padding-right: .8rem; }
+.ev-member.me { border-color: var(--green); }
+.ev-member small { font-weight: 600; color: var(--muted); font-size: .75rem; }
+.ev-x { border: 0; background: none; color: var(--muted); font-size: 1.15rem; line-height: 1; width: 1.6rem; height: 1.6rem; border-radius: 50%; cursor: pointer; }
+.ev-x:hover { background: var(--paper-2); color: #c0392b; }
+.ev-invite-box { clear: both; }
+.ev-invite-box summary { cursor: pointer; color: var(--green); font-weight: 700; padding: .3rem 0; }
+.ev-invite-box form { margin-top: .7rem; }
+.ev-field { margin-bottom: 1rem; }
+.ev-label { display: block; font-weight: 700; font-size: .92rem; margin-bottom: .4rem; }
+.ev-groups { display: flex; flex-wrap: wrap; gap: .45rem; }
+.ev-check { display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .75rem; border: 1.5px solid var(--line); border-radius: 999px; cursor: pointer; font-size: .92rem; }
+.ev-check:has(input:checked) { border-color: var(--green); background: var(--green-soft); }
+.ev-check input { accent-color: var(--green); }
+.ev-comments { clear: both; list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: .6rem; }
+.ev-comment { padding: .6rem .8rem; border-radius: 12px; background: var(--paper-2); max-width: 92%; }
+.ev-comment.own { align-self: flex-end; background: var(--green-soft); }
+.ev-comment-head { display: flex; align-items: center; gap: .6rem; }
+.ev-comment-head .ev-x { margin-left: auto; }
+.ev-comment p { margin: .25rem 0 0; line-height: 1.5; overflow-wrap: anywhere; }
+.ev-comment-form { clear: both; display: flex; gap: .5rem; align-items: flex-end; }
+.ev-comment-form textarea { flex: 1; min-width: 0; padding: .6rem .8rem; border: 1.5px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink); font: inherit; resize: vertical; }
+.ev-comment-form textarea:focus { outline: none; border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+.ev-course-pick { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-bottom: .7rem; }
+.ev-thumb { display: grid; place-items: center; font-size: 1.7rem; background: var(--green-soft); }
+.plan-events { margin-bottom: .8rem; }
+.pick-event { display: block; margin: -.3rem 0 .7rem; font-weight: 700; color: var(--green); text-decoration: none; }
+.cal-ev { position: absolute; left: 4px; right: 4px; top: 30px; z-index: 1; display: flex; align-items: center; gap: .25rem; padding: .1rem .35rem; border-radius: 6px;
+  background: #f3c845; color: #3b2d00; font-size: .72rem; font-weight: 800; overflow: hidden; white-space: nowrap; }
+.cal-ev span { overflow: hidden; text-overflow: ellipsis; }
+.cal-day.has-ev, .cal-day:has(.cal-ev) { border-color: #e0b52f; }
+@media (max-width: 640px) {
+  .cal-ev { left: auto; right: 3px; top: auto; bottom: 3px; padding: 0 .15rem; font-size: .65rem; background: none; }
+  .cal-ev span { display: none; }
+  .ev-card { padding: .7rem .8rem; gap: .8rem; }
+  .ev-comment { max-width: 100%; }
+}

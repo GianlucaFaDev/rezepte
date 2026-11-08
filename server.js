@@ -180,6 +180,43 @@ CREATE TABLE IF NOT EXISTS shopping_lists (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_shopping_user ON shopping_lists(user_id);`);
+// Eventplaner: Events mit Teilnehmern (Ersteller ist auch Teilnehmer), beigefügten Rezepten und Kommentaren.
+// Rezepte, die einem Event beigefügt sind, dürfen alle Teilnehmer ansehen.
+db.exec(`
+CREATE TABLE IF NOT EXISTS events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title       TEXT NOT NULL,
+  day         TEXT NOT NULL,             -- YYYY-MM-DD
+  time        TEXT NOT NULL DEFAULT '',  -- HH:MM oder leer
+  location    TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS event_members (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (event_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_members_user ON event_members(user_id);
+CREATE TABLE IF NOT EXISTS event_recipes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  recipe_id  INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  added_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  course     TEXT NOT NULL DEFAULT 'Hauptspeise',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (event_id, recipe_id)
+);
+CREATE INDEX IF NOT EXISTS idx_event_recipes_recipe ON event_recipes(recipe_id);
+CREATE TABLE IF NOT EXISTS event_comments (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_event_comments_event ON event_comments(event_id);`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -400,9 +437,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Fotos nur für den Besitzer des Rezepts und seine Gruppenmitglieder
 app.use('/uploads', (req, res, next) => {
   if (!req.user) return res.status(401).end();
-  const row = db.prepare(`SELECT r.user_id FROM photos p JOIN recipes r ON r.id = p.recipe_id
+  const row = db.prepare(`SELECT r.id, r.user_id FROM photos p JOIN recipes r ON r.id = p.recipe_id
                           WHERE p.filename = ?`).get(path.basename(req.path));
-  if (!row || !canView(row.user_id, req.user.id)) return res.status(404).end();
+  if (!row || !canViewRecipe(row.id, row.user_id, req.user.id)) return res.status(404).end();
   res.set('Cache-Control', 'private, max-age=2592000, immutable');
   next();
 }, express.static(UPLOAD_DIR, { cacheControl: false }));
@@ -438,6 +475,11 @@ function canView(ownerId, userId) {
   if (ownerId === userId) return true;
   return !!db.prepare(`SELECT 1 FROM group_members a JOIN group_members b ON a.group_id = b.group_id
                        WHERE a.user_id = ? AND a.accepted = 1 AND b.user_id = ? AND b.accepted = 1`).get(userId, ownerId);
+}
+// Einzelnes Rezept: zusätzlich sichtbar, wenn es einem Event beigefügt ist, an dem userId teilnimmt
+function canViewRecipe(recipeId, ownerId, userId) {
+  return canView(ownerId, userId) || !!db.prepare(`SELECT 1 FROM event_recipes er
+    JOIN event_members m ON m.event_id = er.event_id WHERE er.recipe_id = ? AND m.user_id = ?`).get(recipeId, userId);
 }
 // Ansicht: "mine" (eigene Rezepte), eine Gruppen-ID (Rezepte aller Mitglieder) oder
 // "all" (eigene + alle Gruppen, z. B. für den Kalender). Ungültige Gruppe → eigene Rezepte.
@@ -510,7 +552,7 @@ const rowToSummary = (r, userId) => {
 // Rezept zum Ansehen: eigenes oder eines aus einer gemeinsamen Gruppe
 function getViewable(id, userId) {
   const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(id);
-  if (!row || !canView(row.user_id, userId)) return null;
+  if (!row || !canViewRecipe(Number(id), row.user_id, userId)) return null;
   const recipe = getRecipe(id, row.user_id);
   recipe.own = row.user_id === userId;
   recipe.author = db.prepare('SELECT username FROM users WHERE id = ?').get(row.user_id).username;
@@ -518,6 +560,7 @@ function getViewable(id, userId) {
     delete recipe.share_token; // Freigabe-Link gehört dem Besitzer
     recipe.myVersion = myVersion(recipe, userId);
     recipe.hidden = !!db.prepare('SELECT 1 FROM hidden_recipes WHERE user_id = ? AND recipe_id = ?').get(userId, id);
+    recipe.viaEvent = !canView(row.user_id, userId); // nur über ein Event sichtbar (kein Gruppenrezept)
   }
   delete recipe.user_id;
   delete recipe.copied_from;
@@ -1051,12 +1094,229 @@ app.delete('/api/shopping/:id', (req, res) => {
 // Rezept eines Gruppenmitglieds ins eigene Kochbuch kopieren
 app.post('/api/recipes/:id/copy', (req, res) => {
   const row = db.prepare('SELECT user_id FROM recipes WHERE id = ?').get(req.params.id);
-  if (!row || !canView(row.user_id, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  if (!row || !canViewRecipe(Number(req.params.id), row.user_id, req.user.id)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
   if (row.user_id === req.user.id) return res.status(400).json({ error: 'Das ist schon dein eigenes Rezept' });
   const src = getRecipe(req.params.id, row.user_id);
   const existing = myVersion(src, req.user.id);
   if (existing) return res.json({ id: existing, existing: true });
   res.status(201).json({ id: copyRecipe(src, req.user.id) });
+});
+
+// ---------- Eventplaner ----------
+const COURSES = ['Vorspeise', 'Hauptspeise', 'Dessert', 'Sonstiges'];
+const MAX_EVENTS = 100;          // Events, die ein Benutzer anlegen kann
+const MAX_EVENT_MEMBERS = 50;
+const MAX_EVENT_RECIPES = 40;
+const MAX_EVENT_COMMENTS = 500;
+const eventJson = express.json({ limit: '20kb' });
+const isTime = (t) => /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
+const txt = (v, max) => String(v ?? '').trim().slice(0, max);
+
+const eventOf = (eventId, userId) => db.prepare(`SELECT e.* FROM events e JOIN event_members m ON m.event_id = e.id
+                                                WHERE e.id = ? AND m.user_id = ?`).get(eventId, userId);
+// Gang aus dem Rezept ableiten (für die Vorauswahl beim Beifügen)
+function courseFor(gang) {
+  const g = String(gang || '').toLowerCase();
+  if (/vorspeise|starter|antipast|suppe/.test(g)) return 'Vorspeise';
+  if (/dessert|nachspeise|nachtisch|kuchen|süß/.test(g)) return 'Dessert';
+  if (/haupt/.test(g)) return 'Hauptspeise';
+  return g ? 'Sonstiges' : 'Hauptspeise';
+}
+function eventFields(body) {
+  const f = {
+    title: txt(body?.title, 100), day: String(body?.day ?? ''), time: String(body?.time ?? '').trim(),
+    location: txt(body?.location, 200), description: txt(body?.description, 4000),
+  };
+  if (!f.title) return { error: 'Bitte einen Titel eingeben' };
+  if (!isDay(f.day)) return { error: 'Bitte ein gültiges Datum wählen' };
+  if (f.time && !isTime(f.time)) return { error: 'Ungültige Uhrzeit' };
+  return { f };
+}
+// Benutzer (per Name) und ganze Gruppen (in denen der Einladende selbst Mitglied ist) zu IDs auflösen
+function resolveInvitees(body, userId) {
+  const ids = new Set();
+  const unknown = [];
+  for (const name of toList(body?.usernames).slice(0, MAX_EVENT_MEMBERS)) {
+    const u = db.prepare('SELECT id FROM users WHERE username = ? AND approved = 1').get(name);
+    if (u) ids.add(u.id); else unknown.push(name);
+  }
+  for (const gid of toList(body?.groups).map(Number).filter(Number.isFinite)) {
+    (groupMembers(gid, userId) || []).forEach((id) => ids.add(id));
+  }
+  return { ids: [...ids], unknown };
+}
+function addMembers(eventId, ids) {
+  const current = db.prepare('SELECT COUNT(*) AS n FROM event_members WHERE event_id = ?').get(eventId).n;
+  const ins = db.prepare('INSERT OR IGNORE INTO event_members (event_id, user_id) VALUES (?, ?)');
+  let added = 0;
+  for (const id of ids) {
+    if (current + added >= MAX_EVENT_MEMBERS) throw new HttpError(400, `Höchstens ${MAX_EVENT_MEMBERS} Teilnehmer pro Event`);
+    added += ins.run(eventId, id).changes;
+  }
+  return added;
+}
+const EVENT_LIST = `SELECT e.id, e.title, e.day, e.time, e.location, e.owner_id, o.username AS owner,
+    (SELECT COUNT(*) FROM event_members x WHERE x.event_id = e.id) AS members,
+    (SELECT COUNT(*) FROM event_recipes x WHERE x.event_id = e.id) AS recipes,
+    (SELECT COUNT(*) FROM event_comments x WHERE x.event_id = e.id) AS comments
+  FROM events e JOIN event_members m ON m.event_id = e.id JOIN users o ON o.id = e.owner_id
+  WHERE m.user_id = ?`;
+const eventSummary = (e, uid) => {
+  const { owner_id, ...rest } = e;
+  return { ...rest, isOwner: owner_id === uid };
+};
+
+// Eigene Events (als Ersteller oder Teilnehmer), optional nur in einem Zeitraum (Kalender)
+app.get('/api/events', (req, res) => {
+  const uid = req.user.id;
+  const { from, to } = req.query;
+  const rows = isDay(from) && isDay(to)
+    ? db.prepare(`${EVENT_LIST} AND e.day BETWEEN ? AND ? ORDER BY e.day, e.time`).all(uid, from, to)
+    : db.prepare(`${EVENT_LIST} ORDER BY e.day, e.time`).all(uid);
+  res.json(rows.map((e) => eventSummary(e, uid)));
+});
+
+app.get('/api/events/:id', (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const isOwner = e.owner_id === uid;
+  const members = db.prepare(`SELECT u.id, u.username FROM event_members m JOIN users u ON u.id = m.user_id
+                              WHERE m.event_id = ? ORDER BY u.id = ? DESC, u.username COLLATE NOCASE`).all(e.id, e.owner_id);
+  const recipes = db.prepare(`SELECT er.id AS entry, er.course, er.added_by, a.username AS added_by_name,
+      r.id, r.title, r.gang, u.username AS author,
+      (SELECT filename FROM photos p WHERE p.recipe_id = r.id ORDER BY position, id LIMIT 1) AS photo
+    FROM event_recipes er JOIN recipes r ON r.id = er.recipe_id JOIN users u ON u.id = r.user_id
+    LEFT JOIN users a ON a.id = er.added_by
+    WHERE er.event_id = ? ORDER BY er.created_at, er.id`).all(e.id);
+  const comments = db.prepare(`SELECT c.id, c.body, c.created_at, c.user_id, u.username FROM event_comments c
+                               JOIN users u ON u.id = c.user_id WHERE c.event_id = ? ORDER BY c.created_at, c.id`).all(e.id);
+  res.json({
+    id: e.id, title: e.title, day: e.day, time: e.time, location: e.location, description: e.description,
+    owner: members.find((m) => m.id === e.owner_id)?.username || '', isOwner,
+    members: members.map((m) => ({ ...m, isOwner: m.id === e.owner_id, isMe: m.id === uid })),
+    recipes: recipes.map(({ added_by, ...r }) => ({ ...r, canRemove: isOwner || added_by === uid })),
+    comments: comments.map(({ user_id, ...c }) => ({ ...c, own: user_id === uid, canDelete: isOwner || user_id === uid })),
+  });
+});
+
+app.post('/api/events', eventJson, (req, res) => {
+  const uid = req.user.id;
+  const { f, error } = eventFields(req.body);
+  if (error) return res.status(400).json({ error });
+  if (db.prepare('SELECT COUNT(*) AS n FROM events WHERE owner_id = ?').get(uid).n >= MAX_EVENTS) {
+    return res.status(400).json({ error: `Du kannst höchstens ${MAX_EVENTS} Events anlegen, bitte alte löschen` });
+  }
+  const { ids, unknown } = resolveInvitees(req.body, uid);
+  if (unknown.length) return res.status(404).json({ error: `Benutzer nicht gefunden: ${unknown.join(', ')}` });
+  const id = db.transaction(() => {
+    const eid = db.prepare('INSERT INTO events (owner_id, title, day, time, location, description) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(uid, f.title, f.day, f.time, f.location, f.description).lastInsertRowid;
+    addMembers(eid, [uid, ...ids]);
+    return eid;
+  })();
+  res.status(201).json({ id });
+});
+
+app.put('/api/events/:id', eventJson, (req, res) => {
+  const e = eventOf(req.params.id, req.user.id);
+  if (!e || e.owner_id !== req.user.id) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const { f, error } = eventFields(req.body);
+  if (error) return res.status(400).json({ error });
+  db.prepare('UPDATE events SET title = ?, day = ?, time = ?, location = ?, description = ? WHERE id = ?')
+    .run(f.title, f.day, f.time, f.location, f.description, e.id);
+  res.status(204).end();
+});
+
+app.delete('/api/events/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM events WHERE id = ? AND owner_id = ?').run(req.params.id, req.user.id);
+  if (!info.changes) return res.status(404).json({ error: 'Event nicht gefunden' });
+  res.status(204).end();
+});
+
+// Personen oder ganze Gruppen hinzufügen (nur Ersteller)
+app.post('/api/events/:id/members', eventJson, (req, res) => {
+  const e = eventOf(req.params.id, req.user.id);
+  if (!e || e.owner_id !== req.user.id) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const { ids, unknown } = resolveInvitees(req.body, req.user.id);
+  if (unknown.length) return res.status(404).json({ error: `Benutzer nicht gefunden: ${unknown.join(', ')}` });
+  const added = db.transaction(() => addMembers(e.id, ids))();
+  res.status(201).json({ added });
+});
+
+// Teilnehmer entfernen (Ersteller) bzw. selbst austreten
+app.delete('/api/events/:id/members/:userId', (req, res) => {
+  const uid = req.user.id;
+  const target = Number(req.params.userId);
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  if (target === e.owner_id) return res.status(400).json({ error: 'Der Ersteller kann das Event nur löschen, nicht verlassen' });
+  if (target !== uid && e.owner_id !== uid) return res.status(403).json({ error: 'Nur der Ersteller kann Teilnehmer entfernen' });
+  db.prepare('DELETE FROM event_members WHERE event_id = ? AND user_id = ?').run(e.id, target);
+  res.status(204).end();
+});
+
+// Rezept beifügen (jeder Teilnehmer, nur Rezepte, die er selbst sehen darf)
+app.post('/api/events/:id/recipes', eventJson, (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const recipeId = Number(req.body?.recipe_id);
+  const r = db.prepare('SELECT id, user_id, gang FROM recipes WHERE id = ?').get(recipeId);
+  if (!r || !canViewRecipe(r.id, r.user_id, uid)) return res.status(404).json({ error: 'Rezept nicht gefunden' });
+  if (db.prepare('SELECT COUNT(*) AS n FROM event_recipes WHERE event_id = ?').get(e.id).n >= MAX_EVENT_RECIPES) {
+    return res.status(400).json({ error: `Höchstens ${MAX_EVENT_RECIPES} Rezepte pro Event` });
+  }
+  const course = COURSES.includes(req.body?.course) ? req.body.course : courseFor(r.gang);
+  const info = db.prepare('INSERT OR IGNORE INTO event_recipes (event_id, recipe_id, added_by, course) VALUES (?, ?, ?, ?)')
+    .run(e.id, r.id, uid, course);
+  if (!info.changes) return res.status(409).json({ error: 'Das Rezept ist schon beigefügt' });
+  res.status(201).json({ course });
+});
+
+// Gang eines beigefügten Rezepts ändern
+app.put('/api/events/:id/recipes/:entry', eventJson, (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  if (!COURSES.includes(req.body?.course)) return res.status(400).json({ error: 'Ungültiger Gang' });
+  const info = db.prepare('UPDATE event_recipes SET course = ? WHERE id = ? AND event_id = ? AND (added_by = ? OR ?)')
+    .run(req.body.course, req.params.entry, e.id, uid, e.owner_id === uid ? 1 : 0);
+  if (!info.changes) return res.status(404).json({ error: 'Eintrag nicht gefunden' });
+  res.status(204).end();
+});
+
+app.delete('/api/events/:id/recipes/:entry', (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const info = db.prepare('DELETE FROM event_recipes WHERE id = ? AND event_id = ? AND (added_by = ? OR ?)')
+    .run(req.params.entry, e.id, uid, e.owner_id === uid ? 1 : 0);
+  if (!info.changes) return res.status(404).json({ error: 'Eintrag nicht gefunden' });
+  res.status(204).end();
+});
+
+app.post('/api/events/:id/comments', eventJson, (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const body = txt(req.body?.body, 2000);
+  if (!body) return res.status(400).json({ error: 'Kommentar ist leer' });
+  if (db.prepare('SELECT COUNT(*) AS n FROM event_comments WHERE event_id = ?').get(e.id).n >= MAX_EVENT_COMMENTS) {
+    return res.status(400).json({ error: 'Maximale Anzahl Kommentare erreicht' });
+  }
+  db.prepare('INSERT INTO event_comments (event_id, user_id, body) VALUES (?, ?, ?)').run(e.id, uid, body);
+  res.status(201).end();
+});
+
+app.delete('/api/events/:id/comments/:cid', (req, res) => {
+  const uid = req.user.id;
+  const e = eventOf(req.params.id, uid);
+  if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  const info = db.prepare('DELETE FROM event_comments WHERE id = ? AND event_id = ? AND (user_id = ? OR ?)')
+    .run(req.params.cid, e.id, uid, e.owner_id === uid ? 1 : 0);
+  if (!info.changes) return res.status(404).json({ error: 'Kommentar nicht gefunden' });
+  res.status(204).end();
 });
 
 function handleSave(req, res) {

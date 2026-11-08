@@ -75,6 +75,12 @@ werden; Kalender und Kategorien selbst bleiben privat. Rezepte anderer lassen si
 **ausblenden** (Detailansicht → „Ausblenden“): Sie verschwinden dann aus Gruppenansicht, Zufall und
 Kalenderauswahl, die anderen behalten sie. Wieder einblenden im Benutzermenü unter „Ausgeblendete Rezepte“.
 
+**Eventplaner:** Oben unter „Eventplaner“ oder im Kalender (Tag antippen) Events anlegen, mit Datum,
+Uhrzeit, Ort und Beschreibung. Einzelne Personen (Benutzername) oder ganze Gruppen einladen; Eingeladene
+sind direkt dabei und können jederzeit austreten. Teilnehmer fügen Rezepte bei (unterteilt nach
+Vorspeise, Hauptspeise, Dessert) und schreiben Kommentare. Beigefügte Rezepte können alle Teilnehmer
+ansehen, auch ohne gemeinsame Gruppe. Bearbeiten, Löschen und Teilnehmer entfernen darf der Ersteller.
+
 **Einkaufsliste:** Im Kalender auf „Einkaufsliste“ tippen, dann ersten und letzten Tag antippen (auch über
 Monatsgrenzen). Die Zutaten der geplanten Gerichte werden zusammengerechnet (g/kg und ml/l werden
 umgerechnet). Die Liste lässt sich kopieren, teilen oder speichern; gespeicherte Listen stehen im

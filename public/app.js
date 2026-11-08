@@ -295,7 +295,7 @@ function recipeCard(r, { link = true, big = false } = {}) {
 async function route() {
   if (cleanup) { cleanup(); cleanup = null; }
   closeSheet();
-  const [, view, id] = (location.hash.slice(1) || '/').split('/');
+  const [, view, id, sub] = (location.hash.slice(1) || '/').split('/');
   if (view !== 'kalender') shopSel = null;
   shareToken = view === 's' ? id : null;
   if (!shareToken) document.title = 'Kochbuch';
@@ -315,6 +315,7 @@ async function route() {
     else if (view === 'ausgeblendet') await renderHidden();
     else if (view === 'kalender') await renderCalendar(id);
     else if (view === 'einkaufslisten') await renderShopping(id);
+    else if (view === 'events') await renderEvents(id, sub);
     else if (view === 'r') await renderDetail(id);
     else if (view === 'neu') renderForm();
     else if (view === 'edit') await renderForm(id);
@@ -694,7 +695,7 @@ async function renderDetail(id, { shared = false } = {}) {
         ${r.myVersion
           ? `<a class="btn btn-outline" href="#/r/${r.myVersion}">Meine Version öffnen</a>`
           : '<button class="btn btn-primary" id="copy">+ In mein Kochbuch kopieren</button>'}
-        ${r.hidden
+        ${r.viaEvent ? '' : r.hidden
           ? '<button class="btn btn-outline" id="unhide">Wieder einblenden</button>'
           : '<button class="btn btn-ghost-danger" id="hide" title="Für dich ausblenden, die Gruppe behält das Rezept">Ausblenden</button>'}
       </div>` : `<div class="actions">
@@ -874,7 +875,12 @@ async function renderCalendar(monthStr) {
   const last = new Date(y, m, 0);
   const start = new Date(y, m - 1, 1 - ((first.getDay() + 6) % 7));            // Montag davor
   const end = new Date(y, m - 1, last.getDate() + (6 - ((last.getDay() + 6) % 7))); // Sonntag danach
-  const plan = await api(`/api/plan?from=${ymd(start)}&to=${ymd(end)}`);
+  const [plan, events] = await Promise.all([
+    api(`/api/plan?from=${ymd(start)}&to=${ymd(end)}`),
+    api(`/api/events?from=${ymd(start)}&to=${ymd(end)}`),
+  ]);
+  const evByDay = {};
+  for (const ev of events) (evByDay[ev.day] ||= []).push(ev);
   const byDay = {}; // Tag → Liste der Gerichte (Vorspeise, Hauptgang, Nachtisch …)
   for (const e of plan) (byDay[e.day] ||= []).push(e);
   const month = (yy, mm) => ymd(new Date(yy, mm - 1, 1)).slice(0, 7);
@@ -891,6 +897,7 @@ async function renderCalendar(monthStr) {
       ${e ? (e.photo ? `<img src="${photoUrl(e.photo)}" alt="" loading="lazy">` : `<span class="cal-dot" style="--dc:${recipeColor(e.id)}"></span>`) : ''}
       <span class="cal-num">${d.getDate()}</span>
       ${list.length > 1 ? `<span class="cal-more">${list.length}</span>` : ''}
+      ${evByDay[day] ? `<span class="cal-ev" title="${esc(evByDay[day].map((x) => x.title).join(', '))}">🎉<span>${esc(evByDay[day][0].title)}${evByDay[day].length > 1 ? ` +${evByDay[day].length - 1}` : ''}</span></span>` : ''}
       ${e ? `<span class="cal-title">${esc(titles)}</span>` : ''}
     </button>`;
   }
@@ -954,7 +961,7 @@ async function renderCalendar(monthStr) {
     const btn = ev.target.closest('.cal-day');
     if (!btn) return;
     const day = btn.dataset.day;
-    if (!shopSel) return byDay[day] ? openDaySheet(day, refresh) : showRecipePicker(day, refresh);
+    if (!shopSel) return byDay[day] || evByDay[day] ? openDaySheet(day, refresh) : showRecipePicker(day, refresh);
     if (!shopSel.start) {
       shopSel.start = day;
       return syncShopUi();
@@ -1181,11 +1188,18 @@ const MAX_PER_DAY = 6;
 
 // Alle Gerichte eines Tages: öffnen, austauschen, entfernen, weiteres hinzufügen
 async function openDaySheet(day, refresh) {
-  let entries;
-  try { entries = await api(`/api/plan?from=${day}&to=${day}`); } catch (e) { return toast(e.message, true); }
-  if (!entries.length) return showRecipePicker(day, refresh);
+  let entries, events;
+  try {
+    [entries, events] = await Promise.all([api(`/api/plan?from=${day}&to=${day}`), api(`/api/events?from=${day}&to=${day}`)]);
+  } catch (e) { return toast(e.message, true); }
+  if (!entries.length && !events.length) return showRecipePicker(day, refresh);
   const panel = openSheet(`
     <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
+    ${events.length ? `<div class="plan-list plan-events">${events.map((ev) => `
+      <a class="plan-recipe" href="#/events/${ev.id}">
+        <span class="plan-thumb ev-thumb">🎉</span>
+        <span class="plan-info"><b>${esc(ev.title)}</b><small>${ev.time ? esc(ev.time) + ' Uhr · ' : ''}Event öffnen ›</small></span>
+      </a>`).join('')}</div>` : ''}
     <div class="plan-list">${entries.map((e) => `
       <div class="plan-entry">
         <a class="plan-recipe" href="#/r/${e.id}">
@@ -1198,8 +1212,10 @@ async function openDaySheet(day, refresh) {
         </div>
       </div>`).join('')}</div>
     ${entries.length < MAX_PER_DAY
-      ? '<button class="btn btn-outline plan-add" id="plan-add">+ Weiteres Rezept hinzufügen</button><p class="hint plan-add-hint">z. B. Vorspeise oder Nachtisch</p>'
-      : ''}`);
+      ? `<button class="btn btn-outline plan-add" id="plan-add">+ ${entries.length ? 'Weiteres Rezept hinzufügen' : 'Rezept einplanen'}</button>
+         ${entries.length ? '<p class="hint plan-add-hint">z. B. Vorspeise oder Nachtisch</p>' : ''}`
+      : ''}
+    <a class="btn btn-outline plan-add" href="#/events/neu/${day}">🎉 Event an diesem Tag anlegen</a>`);
   $('#plan-add', panel)?.addEventListener('click', () => showRecipePicker(day, refresh));
   $('.plan-list', panel).addEventListener('click', async (ev) => {
     const change = ev.target.closest('[data-change]');
@@ -1210,7 +1226,7 @@ async function openDaySheet(day, refresh) {
       await api('/api/plan/' + remove.dataset.remove, { method: 'DELETE' });
       toast('Entfernt');
       await refresh();
-      if (entries.length > 1) openDaySheet(day, refresh); else closeSheet();
+      if (entries.length > 1 || events.length) openDaySheet(day, refresh); else closeSheet();
     } catch (e) { toast(e.message, true); }
   });
 }
@@ -1219,6 +1235,7 @@ async function openDaySheet(day, refresh) {
 async function showRecipePicker(day, refresh, entryId = null) {
   const panel = openSheet(`
     <h2 class="sheet-h">${esc(dayLabel(day))}</h2>
+    ${entryId ? '' : `<a class="pick-event" href="#/events/neu/${day}">🎉 Oder ein Event an diesem Tag anlegen ›</a>`}
     <input type="search" class="pick-search" placeholder="Rezept suchen…" autocomplete="off">
     <div class="pick-list"><div class="loading">Lade…</div></div>`);
   let list = [];
@@ -1254,6 +1271,303 @@ async function showRecipePicker(day, refresh, entryId = null) {
       toast(`${saved.title} eingeplant ✓`);
       await refresh();
       openDaySheet(day, refresh); // Tagesübersicht zeigen, damit direkt ein weiteres Gericht dazukommen kann
+    } catch (err) { toast(err.message, true); }
+  });
+}
+
+// ================= Eventplaner =================
+const COURSES = ['Vorspeise', 'Hauptspeise', 'Dessert', 'Sonstiges'];
+const evDay = (d, opts) => new Date(d + 'T12:00:00').toLocaleDateString('de-DE', opts);
+const evWhen = (e) => `${evDay(e.day, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${e.time ? `, ${e.time} Uhr` : ''}`;
+const planThumb = (r) => `<span class="plan-thumb">${r.photo
+  ? `<img src="${photoUrl(r.photo)}" alt="" loading="lazy">`
+  : `<span class="cal-dot" style="--dc:${recipeColor(r.id)}"></span>`}</span>`;
+
+// Einladen: ganze Gruppen (Häkchen) und einzelne Personen (Benutzernamen)
+const inviteFields = () => `
+  ${meta.groups.length ? `<div class="ev-field"><span class="ev-label">Ganze Gruppe</span><div class="ev-groups">
+    ${meta.groups.map((g) => `<label class="ev-check"><input type="checkbox" name="groups" value="${g.id}"> 👥 ${esc(g.name)}</label>`).join('')}
+  </div></div>` : ''}
+  <div class="field"><label>Einzelne Personen <small>Benutzernamen, mit Komma getrennt</small></label>
+    <input name="usernames" placeholder="z. B. anna, tom" autocomplete="off" autocapitalize="none"></div>`;
+const readInvites = (form) => ({
+  groups: $$('input[name="groups"]:checked', form).map((c) => Number(c.value)),
+  usernames: toNames(form.elements.usernames.value),
+});
+const toNames = (s) => String(s || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+async function renderEvents(id, sub) {
+  if (id === 'neu') return renderEventForm(null, sub);
+  if (id && sub === 'bearbeiten') return renderEventForm(id);
+  if (id) return renderEvent(id);
+  const events = await api('/api/events');
+  const today = ymd(new Date());
+  const upcoming = events.filter((e) => e.day >= today);
+  const past = events.filter((e) => e.day < today).reverse();
+  const card = (e) => `<a class="ev-card" href="#/events/${e.id}">
+      <span class="ev-date"><b>${Number(e.day.slice(8))}</b><small>${esc(evDay(e.day, { month: 'short' }))}</small></span>
+      <span class="ev-info">
+        <strong>${esc(e.title)}</strong>
+        <small>${esc([evDay(e.day, { weekday: 'long' }) + (e.time ? `, ${e.time} Uhr` : ''), e.location].filter(Boolean).join(' · '))}</small>
+        <small class="muted">${e.isOwner ? 'von dir' : 'von ' + esc(e.owner)} · ${e.members} Teilnehmer · ${e.recipes} Rezepte${e.comments ? ` · 💬 ${e.comments}` : ''}</small>
+      </span>
+    </a>`;
+  window.scrollTo(0, 0);
+  app.innerHTML = `
+  <div class="form events">
+    <div class="form-head ev-head">
+      <div>
+        <h1>Eventplaner</h1>
+        <p class="muted">Gemeinsam kochen, Geburtstage, Grillabende: Leute einladen, Rezepte sammeln und absprechen.</p>
+      </div>
+      <a class="btn btn-primary" href="#/events/neu">+ Neues Event</a>
+    </div>
+    <h2 class="ev-section">Bevorstehend</h2>
+    ${upcoming.length ? `<div class="ev-list">${upcoming.map(card).join('')}</div>`
+      : '<p class="muted">Keine bevorstehenden Events. Leg eins an oder tipp im Kalender auf einen Tag.</p>'}
+    ${past.length ? `<h2 class="ev-section">Vergangen</h2><div class="ev-list ev-past">${past.map(card).join('')}</div>` : ''}
+  </div>`;
+}
+
+async function renderEventForm(id, presetDay) {
+  const e = id ? await api('/api/events/' + encodeURIComponent(id))
+    : { title: '', day: /^\d{4}-\d{2}-\d{2}$/.test(presetDay || '') ? presetDay : ymd(new Date()), time: '', location: '', description: '' };
+  if (id && !e.isOwner) throw new Error('Nur der Ersteller kann das Event bearbeiten');
+  window.scrollTo(0, 0);
+  app.innerHTML = `
+  <form class="form" id="ev-form" novalidate>
+    <div class="form-head">
+      <a href="${id ? '#/events/' + e.id : '#/events'}" class="back">${ICON.left} Zurück</a>
+      <h1>${id ? 'Event bearbeiten' : 'Neues Event'}</h1>
+    </div>
+    <fieldset class="panel">
+      <legend>Event</legend>
+      <div class="field"><label for="ev-title">Titel</label>
+        <input id="ev-title" name="title" maxlength="100" value="${esc(e.title)}" placeholder="z. B. Pasta-Abend"></div>
+      <div class="row2">
+        <div class="field"><label for="ev-day">Datum</label><input id="ev-day" name="day" type="date" value="${esc(e.day)}"></div>
+        <div class="field"><label for="ev-time">Uhrzeit <small>optional</small></label><input id="ev-time" name="time" type="time" value="${esc(e.time)}"></div>
+      </div>
+      <div class="field"><label for="ev-loc">Ort <small>optional</small></label>
+        <input id="ev-loc" name="location" maxlength="200" value="${esc(e.location)}" placeholder="z. B. bei uns"></div>
+      <div class="field"><label for="ev-desc">Beschreibung <small>optional</small></label>
+        <textarea id="ev-desc" name="description" rows="3" maxlength="4000" placeholder="Was ist geplant?">${esc(e.description)}</textarea></div>
+    </fieldset>
+    ${id ? '' : `<fieldset class="panel"><legend>Einladen</legend>
+      <p class="hint">Eingeladene sind direkt dabei und können jederzeit wieder austreten. Später hinzufügen geht auch.</p>
+      ${inviteFields()}
+    </fieldset>`}
+    <div class="form-actions">
+      <a class="btn btn-outline" href="${id ? '#/events/' + e.id : '#/events'}">Abbrechen</a>
+      <button class="btn btn-primary" type="submit">${id ? 'Speichern' : 'Event anlegen'}</button>
+    </div>
+  </form>`;
+  const form = $('#ev-form');
+  if (!id) form.elements.title.focus();
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const btn = $('button[type="submit"]', form);
+    const body = {
+      title: form.elements.title.value, day: form.elements.day.value, time: form.elements.time.value,
+      location: form.elements.location.value, description: form.elements.description.value,
+      ...(id ? {} : readInvites(form)),
+    };
+    btn.disabled = true;
+    try {
+      const res = await api(id ? '/api/events/' + e.id : '/api/events', {
+        method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      toast(id ? 'Gespeichert' : 'Event angelegt 🎉');
+      location.hash = '#/events/' + (id ? e.id : res.id);
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+}
+
+async function renderEvent(id, keepScroll = false) {
+  const e = await api('/api/events/' + encodeURIComponent(id));
+  const rerender = () => renderEvent(e.id, true);
+  const sections = COURSES.map((c) => [c, e.recipes.filter((r) => r.course === c)])
+    .filter(([c, list]) => list.length || c !== 'Sonstiges');
+  const send = (url, method, body) => api(url, {
+    method, ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+  });
+  const base = '/api/events/' + e.id;
+  const y = window.scrollY;
+
+  app.innerHTML = `
+  <div class="form event">
+    <div class="form-head">
+      <a href="#/events" class="back">${ICON.left} Alle Events</a>
+      <h1>${esc(e.title)}</h1>
+      <p class="ev-meta">📅 ${esc(evWhen(e))}${e.location ? `<br>📍 ${esc(e.location)}` : ''}</p>
+      <p class="muted ev-by">${e.isOwner ? 'Von dir erstellt' : 'Erstellt von ' + esc(e.owner)}</p>
+      ${e.description ? `<p class="ev-desc">${esc(e.description).replace(/\n/g, '<br>')}</p>` : ''}
+      <div class="ev-actions">
+        <a class="btn btn-outline" href="#/kalender/${e.day.slice(0, 7)}">Im Kalender</a>
+        ${e.isOwner
+          ? `<a class="btn btn-outline" href="#/events/${e.id}/bearbeiten">Bearbeiten</a>
+             <button class="btn btn-ghost-danger" data-act="delete">Event löschen</button>`
+          : '<button class="btn btn-ghost-danger" data-act="leave">Event verlassen</button>'}
+      </div>
+    </div>
+
+    <fieldset class="panel">
+      <legend>Rezepte (${e.recipes.length})</legend>
+      ${sections.map(([c, list]) => `<section class="ev-course">
+        <h3>${c}</h3>
+        ${list.length ? list.map((r) => `<div class="ev-recipe">
+          <a class="plan-recipe" href="#/r/${r.id}">
+            ${planThumb(r)}
+            <span class="plan-info"><b>${esc(r.title)}</b>
+              <small>von ${esc(r.author)}${r.added_by_name && r.added_by_name !== r.author ? ` · beigefügt von ${esc(r.added_by_name)}` : ''}</small></span>
+          </a>
+          ${r.canRemove ? `<div class="ev-recipe-actions">
+            <select data-course="${r.entry}" aria-label="Gang">${COURSES.map((x) => `<option${x === r.course ? ' selected' : ''}>${x}</option>`).join('')}</select>
+            <button class="link-btn danger" data-unlink="${r.entry}">Entfernen</button>
+          </div>` : ''}
+        </div>`).join('') : '<p class="muted ev-empty">Noch nichts eingetragen.</p>'}
+      </section>`).join('')}
+      <button class="btn btn-outline ev-add" data-act="add-recipe">+ Rezept beifügen</button>
+    </fieldset>
+
+    <fieldset class="panel">
+      <legend>Teilnehmer (${e.members.length})</legend>
+      <ul class="ev-members">${e.members.map((m) => `<li class="ev-member${m.isMe ? ' me' : ''}">
+        ${esc(m.username)}${m.isOwner ? ' <small>Ersteller</small>' : ''}${m.isMe && !m.isOwner ? ' <small>du</small>' : ''}
+        ${e.isOwner && !m.isOwner ? `<button class="ev-x" data-kick="${m.id}" title="${esc(m.username)} entfernen" aria-label="Entfernen">×</button>` : ''}
+      </li>`).join('')}</ul>
+      ${e.isOwner ? `<details class="ev-invite-box"><summary>+ Personen oder Gruppe hinzufügen</summary>
+        <form id="ev-invite">${inviteFields()}<button class="btn btn-outline" type="submit">Hinzufügen</button></form>
+      </details>` : ''}
+    </fieldset>
+
+    <fieldset class="panel">
+      <legend>Kommentare (${e.comments.length})</legend>
+      ${e.comments.length ? `<ul class="ev-comments">${e.comments.map((c) => `<li class="ev-comment${c.own ? ' own' : ''}">
+        <div class="ev-comment-head"><b>${esc(c.username)}</b><small class="muted">${esc(fmtCreated(c.created_at))}</small>
+          ${c.canDelete ? `<button class="ev-x" data-uncomment="${c.id}" title="Kommentar löschen" aria-label="Löschen">×</button>` : ''}</div>
+        <p>${esc(c.body).replace(/\n/g, '<br>')}</p>
+      </li>`).join('')}</ul>` : '<p class="muted">Noch keine Kommentare. Wer bringt was mit?</p>'}
+      <form id="ev-comment" class="ev-comment-form">
+        <textarea name="body" rows="2" maxlength="2000" placeholder="Kommentar schreiben …"></textarea>
+        <button class="btn btn-primary" type="submit">Senden</button>
+      </form>
+    </fieldset>
+  </div>`;
+  window.scrollTo(0, keepScroll ? y : 0);
+
+  const root = $('.event');
+  root.addEventListener('click', async (ev) => {
+    const t = ev.target.closest('[data-act], [data-unlink], [data-kick], [data-uncomment]');
+    if (!t) return;
+    try {
+      if (t.dataset.act === 'add-recipe') return pickEventRecipe(e, rerender);
+      if (t.dataset.act === 'delete') {
+        if (!confirm(`„${e.title}“ für alle löschen?`)) return;
+        await send(base, 'DELETE');
+        toast('Event gelöscht');
+        return (location.hash = '#/events');
+      }
+      if (t.dataset.act === 'leave') {
+        if (!confirm('Event verlassen? Du siehst es danach nicht mehr.')) return;
+        const me = e.members.find((m) => m.isMe);
+        await send(`${base}/members/${me.id}`, 'DELETE');
+        toast('Du hast das Event verlassen');
+        return (location.hash = '#/events');
+      }
+      if (t.dataset.unlink) {
+        await send(`${base}/recipes/${t.dataset.unlink}`, 'DELETE');
+        toast('Rezept entfernt');
+      } else if (t.dataset.kick) {
+        const m = e.members.find((x) => String(x.id) === t.dataset.kick);
+        if (!confirm(`${m?.username || 'Teilnehmer'} aus dem Event entfernen?`)) return;
+        await send(`${base}/members/${t.dataset.kick}`, 'DELETE');
+        toast('Entfernt');
+      } else if (t.dataset.uncomment) {
+        if (!confirm('Kommentar löschen?')) return;
+        await send(`${base}/comments/${t.dataset.uncomment}`, 'DELETE');
+      }
+      await rerender();
+    } catch (err) { toast(err.message, true); }
+  });
+  root.addEventListener('change', async (ev) => {
+    const sel = ev.target.closest('select[data-course]');
+    if (!sel) return;
+    try {
+      await send(`${base}/recipes/${sel.dataset.course}`, 'PUT', { course: sel.value });
+      await rerender();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#ev-invite')?.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const body = readInvites(ev.target);
+    if (!body.groups.length && !body.usernames.length) return toast('Bitte eine Gruppe ankreuzen oder Namen eingeben', true);
+    try {
+      const { added } = await send(`${base}/members`, 'POST', body);
+      toast(added ? `${added} ${added === 1 ? 'Person' : 'Personen'} hinzugefügt` : 'Alle waren schon dabei');
+      await rerender();
+    } catch (err) { toast(err.message, true); }
+  });
+  $('#ev-comment').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const box = ev.target.elements.body;
+    if (!box.value.trim()) return box.focus();
+    const btn = $('button', ev.target);
+    btn.disabled = true;
+    try {
+      await send(`${base}/comments`, 'POST', { body: box.value });
+      await rerender();
+      $('#ev-comment textarea')?.scrollIntoView({ block: 'center' });
+    } catch (err) { toast(err.message, true); btn.disabled = false; }
+  });
+}
+
+// Rezept auswählen und einem Gang zuordnen
+async function pickEventRecipe(e, rerender) {
+  const panel = openSheet(`
+    <h2 class="sheet-h">Rezept beifügen</h2>
+    <div class="ev-course-pick" role="group" aria-label="Gang">
+      <span class="muted">Gang:</span>
+      ${['Automatisch', ...COURSES].map((c, i) => `<button class="chip chip-sm${i ? '' : ' on'}" data-c="${i ? c : ''}">${c}</button>`).join('')}
+    </div>
+    <input type="search" class="pick-search" placeholder="Rezept suchen…" autocomplete="off">
+    <div class="pick-list"><div class="loading">Lade…</div></div>`);
+  let course = '';
+  $('.ev-course-pick', panel).addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-c]');
+    if (!b) return;
+    course = b.dataset.c;
+    $$('.ev-course-pick .chip', panel).forEach((x) => x.classList.toggle('on', x === b));
+  });
+  let list;
+  try { list = await api('/api/recipes?sort=titel&scope=all'); } catch (err) { return toast(err.message, true); }
+  const taken = new Set(e.recipes.map((r) => r.id));
+  list = list.filter((r) => !taken.has(r.id));
+  const box = $('.pick-list', panel);
+  const draw = (q) => {
+    const hits = list.filter((r) => !q || (r.title + ' ' + (r.subtitle || '')).toLowerCase().includes(q.toLowerCase()));
+    box.innerHTML = hits.length ? hits.map((r) => `<button class="pick-item" data-id="${r.id}">
+        ${planThumb(r)}
+        <span class="plan-info"><b>${esc(r.title)}</b>${(() => {
+          const sub = [r.gang, r.own === false && r.author ? 'von ' + r.author : ''].filter(Boolean).join(' · ');
+          return sub ? `<small>${esc(sub)}</small>` : '';
+        })()}</span>
+      </button>`).join('') : '<p class="muted">Kein Rezept gefunden.</p>';
+  };
+  draw('');
+  const search = $('.pick-search', panel);
+  search.addEventListener('input', () => draw(search.value.trim()));
+  box.addEventListener('click', async (ev) => {
+    const item = ev.target.closest('.pick-item');
+    if (!item) return;
+    try {
+      const res = await api(`/api/events/${e.id}/recipes`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipe_id: Number(item.dataset.id), ...(course ? { course } : {}) }),
+      });
+      closeSheet();
+      toast(`Als ${res.course} beigefügt ✓`);
+      await rerender();
     } catch (err) { toast(err.message, true); }
   });
 }
