@@ -217,6 +217,10 @@ CREATE TABLE IF NOT EXISTS event_comments (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_event_comments_event ON event_comments(event_id);`);
+// Benachrichtigung: seen = 0, solange ein hinzugefügter Teilnehmer das Event noch nicht geöffnet hat
+if (!db.prepare('PRAGMA table_info(event_members)').all().some((c) => c.name === 'seen')) {
+  db.exec('ALTER TABLE event_members ADD COLUMN seen INTEGER NOT NULL DEFAULT 1');
+}
 db.exec('CREATE INDEX IF NOT EXISTS idx_recipes_user ON recipes(user_id)');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_recipes_share ON recipes(share_token) WHERE share_token IS NOT NULL');
 
@@ -782,6 +786,7 @@ app.get('/api/meta', (req, res) => {
     groups: db.prepare(`SELECT g.id, g.name FROM user_groups g JOIN group_members m ON m.group_id = g.id
                         WHERE m.user_id = ? AND m.accepted = 1 ORDER BY g.name COLLATE NOCASE`).all(uid),
     invites: db.prepare('SELECT COUNT(*) AS n FROM group_members WHERE user_id = ? AND accepted = 0').get(uid).n,
+    newEvents: newEventCount(uid),
     tags: db.prepare(`SELECT t.tag AS name, COUNT(*) AS n FROM recipe_tags t JOIN recipes r ON r.id = t.recipe_id
                       WHERE ${inIds} GROUP BY t.tag ORDER BY t.tag`).all(...ids),
     total: db.prepare(`SELECT COUNT(*) AS n FROM recipes r WHERE ${inIds}`).get(...ids).n,
@@ -1145,26 +1150,37 @@ function resolveInvitees(body, userId) {
   }
   return { ids: [...ids], unknown };
 }
-function addMembers(eventId, ids) {
+// byUser: wer hinzufügt (für ihn gilt das Event als gesehen, alle anderen bekommen eine Benachrichtigung)
+function addMembers(eventId, ids, byUser) {
   const current = db.prepare('SELECT COUNT(*) AS n FROM event_members WHERE event_id = ?').get(eventId).n;
-  const ins = db.prepare('INSERT OR IGNORE INTO event_members (event_id, user_id) VALUES (?, ?)');
+  const ins = db.prepare('INSERT OR IGNORE INTO event_members (event_id, user_id, seen) VALUES (?, ?, ?)');
   let added = 0;
   for (const id of ids) {
     if (current + added >= MAX_EVENT_MEMBERS) throw new HttpError(400, `Höchstens ${MAX_EVENT_MEMBERS} Teilnehmer pro Event`);
-    added += ins.run(eventId, id).changes;
+    added += ins.run(eventId, id, id === byUser ? 1 : 0).changes;
   }
   return added;
 }
-const EVENT_LIST = `SELECT e.id, e.title, e.day, e.time, e.location, e.owner_id, o.username AS owner,
+// Anzahl der Events, zu denen userId hinzugefügt wurde und die er noch nicht geöffnet hat
+const newEventCount = (userId) =>
+  db.prepare('SELECT COUNT(*) AS n FROM event_members WHERE user_id = ? AND seen = 0').get(userId).n;
+const EVENT_LIST = `SELECT e.id, e.title, e.day, e.time, e.location, e.owner_id, o.username AS owner, m.seen,
     (SELECT COUNT(*) FROM event_members x WHERE x.event_id = e.id) AS members,
     (SELECT COUNT(*) FROM event_recipes x WHERE x.event_id = e.id) AS recipes,
     (SELECT COUNT(*) FROM event_comments x WHERE x.event_id = e.id) AS comments
   FROM events e JOIN event_members m ON m.event_id = e.id JOIN users o ON o.id = e.owner_id
   WHERE m.user_id = ?`;
 const eventSummary = (e, uid) => {
-  const { owner_id, ...rest } = e;
-  return { ...rest, isOwner: owner_id === uid };
+  const { owner_id, seen, ...rest } = e;
+  return { ...rest, isOwner: owner_id === uid, isNew: !seen };
 };
+
+// Für das Abzeichen am Reiter „Eventplaner“: neue Events (Anzahl + Titel der neuesten)
+app.get('/api/events/new', (req, res) => {
+  const rows = db.prepare(`SELECT e.id, e.title, o.username AS owner FROM event_members m JOIN events e ON e.id = m.event_id
+                           JOIN users o ON o.id = e.owner_id WHERE m.user_id = ? AND m.seen = 0 ORDER BY e.day`).all(req.user.id);
+  res.json({ count: rows.length, events: rows.slice(0, 5) });
+});
 
 // Eigene Events (als Ersteller oder Teilnehmer), optional nur in einem Zeitraum (Kalender)
 app.get('/api/events', (req, res) => {
@@ -1180,6 +1196,7 @@ app.get('/api/events/:id', (req, res) => {
   const uid = req.user.id;
   const e = eventOf(req.params.id, uid);
   if (!e) return res.status(404).json({ error: 'Event nicht gefunden' });
+  db.prepare('UPDATE event_members SET seen = 1 WHERE event_id = ? AND user_id = ? AND seen = 0').run(e.id, uid);
   const isOwner = e.owner_id === uid;
   const members = db.prepare(`SELECT u.id, u.username FROM event_members m JOIN users u ON u.id = m.user_id
                               WHERE m.event_id = ? ORDER BY u.id = ? DESC, u.username COLLATE NOCASE`).all(e.id, e.owner_id);
@@ -1212,7 +1229,7 @@ app.post('/api/events', eventJson, (req, res) => {
   const id = db.transaction(() => {
     const eid = db.prepare('INSERT INTO events (owner_id, title, day, time, location, description) VALUES (?, ?, ?, ?, ?, ?)')
       .run(uid, f.title, f.day, f.time, f.location, f.description).lastInsertRowid;
-    addMembers(eid, [uid, ...ids]);
+    addMembers(eid, [uid, ...ids], uid);
     return eid;
   })();
   res.status(201).json({ id });
@@ -1240,7 +1257,7 @@ app.post('/api/events/:id/members', eventJson, (req, res) => {
   if (!e || e.owner_id !== req.user.id) return res.status(404).json({ error: 'Event nicht gefunden' });
   const { ids, unknown } = resolveInvitees(req.body, req.user.id);
   if (unknown.length) return res.status(404).json({ error: `Benutzer nicht gefunden: ${unknown.join(', ')}` });
-  const added = db.transaction(() => addMembers(e.id, ids))();
+  const added = db.transaction(() => addMembers(e.id, ids, req.user.id))();
   res.status(201).json({ added });
 });
 

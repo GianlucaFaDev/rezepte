@@ -320,6 +320,7 @@ async function route() {
     else if (view === 'neu') renderForm();
     else if (view === 'edit') await renderForm(id);
     else await renderList();
+    refreshEventBadge(); // nach dem Rendern, damit ein gerade geöffnetes Event schon als gesehen zählt
   } catch (e) {
     app.innerHTML = shareToken
       ? `<div class="empty"><div class="empty-ic">🔗</div><h2>Rezept nicht verfügbar</h2><p>${esc(e.message)}</p></div>`
@@ -357,7 +358,33 @@ function showUser() {
   $('#menu-groups-badge').textContent = inv;
   $('#menu-groups-badge').hidden = !inv;
   $('#user-badge').hidden = !(n || inv);
+  const ev = auth?.user ? meta?.newEvents || 0 : 0;
+  $('#nav-events-badge').textContent = ev;
+  $('#nav-events-badge').hidden = !ev;
+  $('#nav-events-badge').parentElement.title = ev ? `Eventplaner: ${ev} neu` : 'Eventplaner';
 }
+
+// Benachrichtigung über neue Events: Abzeichen am Reiter und einmal ein Hinweis pro neuer Einladung
+async function refreshEventBadge() {
+  if (!auth?.user || !meta) return;
+  let res;
+  try { res = await api('/api/events/new'); } catch { return; }
+  meta.newEvents = res.count;
+  showUser();
+  const key = res.events.map((e) => e.id).join(',');
+  if (!res.count || ssGet('evNotified') === key) return;
+  ssSet('evNotified', key);
+  const e = res.events[0];
+  const t = $('#toast');
+  t.innerHTML = res.count === 1
+    ? `🎉 <b>${esc(e.owner)}</b> hat dich zu „${esc(e.title)}“ eingeladen. <a href="#/events/${e.id}">Ansehen ›</a>`
+    : `🎉 Du wurdest zu ${res.count} neuen Events eingeladen. <a href="#/events">Ansehen ›</a>`;
+  t.className = 'toast toast-note';
+  t.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => (t.hidden = true), 8000);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshEventBadge(); });
 
 const fmtMB = (bytes) => {
   const mb = bytes / 1048576;
@@ -1304,10 +1331,10 @@ async function renderEvents(id, sub) {
   const today = ymd(new Date());
   const upcoming = events.filter((e) => e.day >= today);
   const past = events.filter((e) => e.day < today).reverse();
-  const card = (e) => `<a class="ev-card" href="#/events/${e.id}">
+  const card = (e) => `<a class="ev-card${e.isNew ? ' ev-new' : ''}" href="#/events/${e.id}">
       <span class="ev-date"><b>${Number(e.day.slice(8))}</b><small>${esc(evDay(e.day, { month: 'short' }))}</small></span>
       <span class="ev-info">
-        <strong>${esc(e.title)}</strong>
+        <strong>${esc(e.title)}${e.isNew ? ' <span class="ev-new-pill">Neu</span>' : ''}</strong>
         <small>${esc([evDay(e.day, { weekday: 'long' }) + (e.time ? `, ${e.time} Uhr` : ''), e.location].filter(Boolean).join(' · '))}</small>
         <small class="muted">${e.isOwner ? 'von dir' : 'von ' + esc(e.owner)} · ${e.members} Teilnehmer · ${e.recipes} Rezepte${e.comments ? ` · 💬 ${e.comments}` : ''}</small>
       </span>
