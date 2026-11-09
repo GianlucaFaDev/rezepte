@@ -176,10 +176,13 @@ function highlightStep(text, ingredients) {
 
 // ================= Bilder =================
 let shareToken = null; // gesetzt, solange ein geteiltes Rezept angezeigt wird
+// encodeURIComponent lässt ' ( ) * ! stehen – die werden zusätzlich kodiert, damit die URL auch in
+// CSS url('…') und HTML-Attributen nichts ausbrechen kann
+const encPart = (s) => encodeURIComponent(s).replace(/['()*!]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
 function photoUrl(f) {
   return shareToken
-    ? `/api/public/${encodeURIComponent(shareToken)}/photos/${encodeURIComponent(f)}`
-    : '/uploads/' + encodeURIComponent(f);
+    ? `/api/public/${encPart(shareToken)}/photos/${encPart(f)}`
+    : '/uploads/' + encPart(f);
 }
 
 function placeholder(id, cls = '') {

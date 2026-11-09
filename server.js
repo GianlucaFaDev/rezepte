@@ -250,6 +250,30 @@ function userOptions(userId) {
 const app = express();
 app.disable('x-powered-by');
 
+// Sicherheits-Header: zweite Verteidigungslinie, falls irgendwo HTML-Maskierung vergessen wird.
+// CSP erlaubt nur Skripte vom eigenen Server (kein Inline-JS, kein eval); Inline-Styles werden für
+// style="--dc:…"-Farbpunkte gebraucht. frame-ancestors/X-Frame-Options verhindern Clickjacking.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' blob: data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+app.use((req, res, next) => {
+  res.set({
+    'Content-Security-Policy': CSP,
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'same-origin',
+  });
+  next();
+});
+
 // Hinter einem Reverse-Proxy (Caddy, nginx, Traefik): TRUST_PROXY setzen, damit req.ip die echte
 // Client-IP ist (Login-Sperre pro IP) und req.secure bei HTTPS stimmt (Secure-Cookie).
 // Werte: Anzahl Proxys ("1"), "loopback", "uniquelocal", IP/Subnetz-Liste ("10.0.0.0/8, 172.16.0.0/12")
