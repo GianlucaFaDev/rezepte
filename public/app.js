@@ -469,6 +469,20 @@ function renderLogin(mode = 'login', notice = '') {
   });
 }
 
+// Design: auto (System), light oder dark – wird pro Gerät im Browser gespeichert
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+  else { delete root.dataset.theme; theme = 'auto'; }
+  lsSet('theme', theme);
+  $$('[data-theme-set]').forEach((b) => b.classList.toggle('on', b.dataset.themeSet === theme));
+  const dark = theme === 'dark' || (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#1b1a18' : '#2f7d4f');
+}
+applyTheme(lsGet('theme'));
+$$('[data-theme-set]').forEach((b) => b.addEventListener('click', () => applyTheme(b.dataset.themeSet)));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => applyTheme(lsGet('theme')));
+
 // Benutzermenü im Header
 const userMenu = $('#user-menu');
 const setMenu = (open) => { userMenu.hidden = !open; $('#btn-user').setAttribute('aria-expanded', String(open)); };

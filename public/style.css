@@ -16,8 +16,9 @@
   --main-h: 300px;
   color-scheme: light;
 }
+/* Dunkles Design: automatisch nach System, außer "Hell" ist gewählt; "Dunkel" erzwingt es immer */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --green: #5fb37d;
     --green-strong: #7cc897;
     --green-soft: #1f3327;
@@ -32,6 +33,21 @@
     --shadow-lg: 0 2px 4px rgba(0, 0, 0, .4), 0 16px 40px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --green: #5fb37d;
+  --green-strong: #7cc897;
+  --green-soft: #1f3327;
+  --bg: #1b1a18;
+  --paper: #26251f;
+  --paper-2: #2f2d27;
+  --ink: #ece8e1;
+  --muted: #a39e94;
+  --line: #3b3932;
+  --danger: #e57361;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 6px 18px rgba(0, 0, 0, .35);
+  --shadow-lg: 0 2px 4px rgba(0, 0, 0, .4), 0 16px 40px rgba(0, 0, 0, .5);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -587,3 +603,10 @@ a.rcard:focus-visible { outline: 3px solid var(--green); outline-offset: 2px; }
 .ev-new-pill { display: inline-block; vertical-align: middle; margin-left: .35rem; padding: .05rem .45rem; border-radius: 999px; background: var(--danger); color: #fff; font-size: .7rem; font-weight: 800; }
 .toast.toast-note a { color: inherit; font-weight: 800; text-decoration: underline; margin-left: .3rem; }
 .toast.toast-note { border-radius: 14px; width: max-content; max-width: calc(100vw - 32px); text-align: center; line-height: 1.45; }
+
+/* ---------- Design-Umschalter im Benutzermenü ---------- */
+.menu-theme { padding: .55rem .75rem .65rem; border-bottom: 1px solid var(--line); margin-bottom: .3rem; }
+.menu-theme > span { display: block; font-size: .75rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: .4rem; }
+.theme-seg { display: flex; background: var(--paper-2); border-radius: 999px; padding: 3px; gap: 2px; }
+.theme-seg button { flex: 1; border: 0; background: none; border-radius: 999px; padding: .35rem .6rem; font: inherit; font-size: .85rem; font-weight: 700; color: var(--muted); cursor: pointer; }
+.theme-seg button.on { background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
